@@ -1,0 +1,94 @@
+# =============================================================================
+# Fully OFFLINE demo configuration.
+#
+# Uses the deterministic synthetic data generator so the whole pipeline runs
+# with no network access (this is what CI's smoke test uses). Great for a quick
+# `make demo` to see end-to-end output in ~10-20 seconds.
+#
+# Run:  quant-platform run-full-pipeline --config configs/synthetic.yaml
+# =============================================================================
+
+project:
+  name: synthetic_demo
+  seed: 42
+  description: "Offline reproducible demo on factor-structured synthetic data."
+
+data:
+  source: synthetic
+  tickers: [SPY, QQQ, AAPL, MSFT, NVDA, JPM, TLT, XOM, GLD, IWM]
+  benchmark: SPY
+  start: "2015-01-01"
+  end: null
+  price_field: adj_close
+  min_observations: 252
+  synthetic:
+    n_days: 2200
+    start: "2015-01-01"
+    annual_drift: 0.08
+    annual_vol: 0.22
+    market_beta_mean: 1.0
+    market_vol: 0.16
+
+features:
+  vol_windows: [5, 21, 63]
+  ma_windows: [10, 20, 50, 200]
+  ema_windows: [12, 26]
+  sharpe_window: 63
+  rsi_window: 14
+  macd: {fast: 12, slow: 26, signal: 9}
+  bollinger: {window: 20, n_std: 2.0}
+  momentum_windows: [21, 63, 126, 252]
+  beta_window: 63
+  realized_vol_window: 21
+  drawdown_window: 252
+  cross_sectional: true
+  dropna: true
+
+model:
+  task: classification
+  target: direction
+  forward_horizon: 1
+  type: gradient_boosting
+  standardize: true
+  params:
+    n_estimators: 150
+    max_depth: 3
+    learning_rate: 0.05
+  cv:
+    scheme: walk_forward
+    n_splits: 4
+    test_size: 126
+    min_train_size: 504
+    embargo: 5
+
+backtest:
+  strategy: long_short
+  signal: model
+  top_quantile: 0.3
+  cost_bps: 1.0
+  slippage_bps: 0.5
+  initial_capital: 1000000
+  max_leverage: 1.0
+  position_sizing: equal_weight
+  vol_target_annual: 0.10
+  max_position_weight: 0.34
+
+risk:
+  var_confidence: 0.95
+  trading_days: 252
+  stress_scenarios:
+    equity_-10pct: -0.10
+    equity_-20pct: -0.20
+    vol_spike_2x: 2.0
+
+tracking:
+  backend: sqlite
+  experiment_name: synthetic_demo
+  db_path: experiments/experiments.sqlite
+  json_dir: experiments/runs
+
+report:
+  output_dir: reports
+  figures_dir: reports/figures
+  format: markdown
+  title: "Quant Research Platform — Synthetic Demo"

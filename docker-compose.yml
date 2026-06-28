@@ -1,0 +1,22 @@
+# Convenience wrapper for running the platform in a container.
+#   docker compose build
+#   docker compose run --rm platform run-full-pipeline --config configs/synthetic.yaml
+services:
+  platform:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: quant-research-data-platform:latest
+    container_name: qrdp
+    environment:
+      QRDP_LOG_LEVEL: ${QRDP_LOG_LEVEL:-INFO}
+      QRDP_SEED: ${QRDP_SEED:-42}
+      QRDP_TRACKING_BACKEND: ${QRDP_TRACKING_BACKEND:-sqlite}
+    volumes:
+      # Persist data, reports, and experiment logs on the host.
+      - ./data:/app/data
+      - ./reports:/app/reports
+      - ./experiments:/app/experiments
+    # Override the command at runtime, e.g.:
+    #   docker compose run --rm platform ingest-data --config configs/example.yaml
+    command: ["--help"]

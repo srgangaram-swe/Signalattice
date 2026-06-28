@@ -1,0 +1,83 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Data artifacts (keep folders via .gitkeep, ignore contents)
+data/raw/*
+data/processed/*
+data/external/*
+!data/**/.gitkeep
+
+# Generated reports & figures (keep example outputs committed selectively)
+reports/figures/*.png
+reports/*.md
+reports/*.html
+!reports/figures/.gitkeep
+!reports/.gitkeep
+!reports/README.md
+!reports/example/
+!reports/example/**
+
+# Experiment tracking artifacts
+experiments/
+mlruns/
+*.sqlite
+*.db
+
+# Models
+models/*.joblib
+models/*.pkl
+*.joblib
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

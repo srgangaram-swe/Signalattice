@@ -1,0 +1,89 @@
+# =============================================================================
+# Example end-to-end configuration.
+#
+# This is the "real data" config used in the README quickstart. It pulls daily
+# data from Yahoo Finance (falling back to Stooq, then synthetic) for a small,
+# liquid cross-section spanning equities, mega-cap tech, a bank and a bond ETF.
+#
+# Run:  quant-platform run-full-pipeline --config configs/example.yaml
+# =============================================================================
+
+project:
+  name: example
+  seed: 42
+  description: "Cross-sectional ML long/short on a liquid multi-asset universe."
+
+data:
+  source: auto            # auto -> yfinance -> stooq -> synthetic fallback
+  tickers: [SPY, QQQ, AAPL, MSFT, NVDA, JPM, TLT]
+  benchmark: SPY
+  start: "2015-01-01"
+  end: null               # null = up to latest available
+  price_field: adj_close
+  max_retries: 3
+  retry_backoff_seconds: 1.5
+  min_observations: 252
+
+features:
+  vol_windows: [5, 21, 63]
+  ma_windows: [10, 20, 50, 200]
+  ema_windows: [12, 26]
+  sharpe_window: 63
+  rsi_window: 14
+  macd: {fast: 12, slow: 26, signal: 9}
+  bollinger: {window: 20, n_std: 2.0}
+  momentum_windows: [21, 63, 126, 252]
+  beta_window: 63
+  realized_vol_window: 21
+  drawdown_window: 252
+  cross_sectional: true
+  dropna: true
+
+model:
+  task: classification     # predict next-day up/down
+  target: direction
+  forward_horizon: 1
+  type: random_forest      # logistic | random_forest | gradient_boosting | xgboost | lightgbm
+  standardize: true
+  params:
+    n_estimators: 300
+    max_depth: 5
+    min_samples_leaf: 100
+  cv:
+    scheme: walk_forward   # walk_forward | expanding
+    n_splits: 5
+    test_size: 126
+    min_train_size: 504
+    embargo: 5
+
+backtest:
+  strategy: long_short     # long_only | long_short
+  signal: model            # model | momentum | ma_crossover
+  top_quantile: 0.3
+  cost_bps: 1.0
+  slippage_bps: 0.5
+  initial_capital: 1000000
+  max_leverage: 1.0
+  position_sizing: equal_weight   # equal_weight | rank | vol_target
+  vol_target_annual: 0.10
+  max_position_weight: 0.34
+
+risk:
+  var_confidence: 0.95
+  trading_days: 252
+  stress_scenarios:
+    equity_-10pct: -0.10
+    equity_-20pct: -0.20
+    vol_spike_2x: 2.0
+
+tracking:
+  backend: sqlite          # sqlite | json | mlflow | none
+  experiment_name: example
+  db_path: experiments/experiments.sqlite
+  json_dir: experiments/runs
+
+report:
+  output_dir: reports/example
+  figures_dir: reports/example/figures
+  format: markdown         # markdown | html
+  title: "Quant Research Platform — Example Run"

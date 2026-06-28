@@ -1,0 +1,54 @@
+# =============================================================================
+# Rules-based baseline: cross-sectional 12-1 momentum long/short.
+#
+# No ML model is trained — the signal is a transparent factor. Use this to
+# benchmark whether the ML model in configs/example.yaml actually adds value
+# after transaction costs.
+#
+# Run:  quant-platform run-full-pipeline --config configs/baseline_momentum.yaml
+# =============================================================================
+
+project:
+  name: baseline_momentum
+  seed: 42
+  description: "Cross-sectional 12-1 momentum long/short baseline (no ML)."
+
+data:
+  source: auto
+  tickers: [SPY, QQQ, AAPL, MSFT, NVDA, JPM, TLT, XOM, GLD, IWM]
+  benchmark: SPY
+  start: "2015-01-01"
+  price_field: adj_close
+
+features:
+  cross_sectional: true
+  dropna: true
+
+model:
+  task: classification
+  target: direction
+  forward_horizon: 1
+  type: logistic          # unused for baseline signal, kept for schema completeness
+
+backtest:
+  strategy: long_short
+  signal: momentum        # rules-based cross-sectional momentum
+  top_quantile: 0.3
+  cost_bps: 1.0
+  slippage_bps: 0.5
+  initial_capital: 1000000
+  max_leverage: 1.0
+  position_sizing: equal_weight
+
+risk:
+  var_confidence: 0.95
+  trading_days: 252
+
+tracking:
+  backend: sqlite
+  experiment_name: baseline_momentum
+
+report:
+  output_dir: reports
+  figures_dir: reports/figures
+  title: "Quant Research Platform — Momentum Baseline"
