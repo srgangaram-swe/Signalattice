@@ -123,7 +123,7 @@ def fetch_yfinance(
             frames.append(_normalise_yf_frame(raw.dropna(how="all"), tickers[0]))
         if not frames:
             raise DataSourceError("yfinance returned no usable frames")
-        return pd.concat(frames, ignore_index=True)
+        return pd.DataFrame(pd.concat(frames, ignore_index=True))
 
     out = _retry(_download, retries=retries, backoff=backoff, what="yfinance download")
     logger.info("Fetched %d rows from yfinance for %d tickers", len(out), len(tickers))
@@ -176,7 +176,7 @@ def fetch_stooq(
             frames.append(raw[[DATE_COL, TICKER_COL, *OHLCV_COLUMNS]])
         if not frames:
             raise DataSourceError("stooq returned no usable frames")
-        return pd.concat(frames, ignore_index=True)
+        return pd.DataFrame(pd.concat(frames, ignore_index=True))
 
     out = _retry(_download, retries=retries, backoff=backoff, what="stooq download")
     logger.info("Fetched %d rows from stooq for %d tickers", len(out), len(tickers))

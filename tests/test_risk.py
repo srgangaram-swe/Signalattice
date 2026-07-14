@@ -35,6 +35,13 @@ def test_max_drawdown_known_path():
     assert np.isclose(rm.max_drawdown(returns), -0.5)
 
 
+def test_drawdown_includes_initial_capital():
+    returns = pd.Series([-0.10, 0.05])
+    drawdown = rm.drawdown_series(returns)
+    assert np.isclose(drawdown.iloc[0], -0.10)
+    assert np.isclose(rm.max_drawdown(returns), -0.10)
+
+
 def test_drawdown_series_non_positive(daily_returns):
     dd = rm.drawdown_series(daily_returns)
     assert (dd <= 1e-12).all()

@@ -1,33 +1,46 @@
 # syntax=docker/dockerfile:1
-# Multi-stage build for a slim runtime image.
-FROM python:3.11-slim AS base
 
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
+FROM python:3.13-slim AS builder
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /build
+
+RUN python -m venv /opt/venv
+
+COPY pyproject.toml README.md LICENSE ./
+COPY src ./src
+
+RUN /opt/venv/bin/python -m pip install --upgrade pip \
+    && /opt/venv/bin/python -m pip install .
+
+
+FROM python:3.13-slim AS runtime
+
+ENV PATH=/opt/venv/bin:$PATH \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    QRDP_DATA_DIR=/app/data
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    XDG_CACHE_HOME=/tmp/.cache \
+    SIGNALATTICE_DATA_DIR=/app/data
+
+RUN groupadd --gid 10001 signalattice \
+    && useradd --uid 10001 --gid signalattice --create-home --shell /usr/sbin/nologin signalattice
 
 WORKDIR /app
 
-# System deps occasionally needed by scientific wheels.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /opt/venv /opt/venv
+COPY --chown=signalattice:signalattice configs ./configs
+COPY --chown=signalattice:signalattice scripts ./scripts
+COPY --chown=signalattice:signalattice data ./data
 
-# Install dependencies first (better layer caching).
-COPY pyproject.toml README.md ./
-COPY src ./src
-RUN pip install --upgrade pip && pip install -e .
+RUN mkdir -p /app/reports/figures /app/experiments /app/models \
+    && chown -R signalattice:signalattice /app
 
-# Copy the rest of the project.
-COPY configs ./configs
-COPY scripts ./scripts
-COPY data ./data
+USER signalattice:signalattice
 
-# Create runtime output dirs.
-RUN mkdir -p /app/reports/figures /app/experiments
-
-ENTRYPOINT ["quant-platform"]
+ENTRYPOINT ["signalattice"]
 CMD ["--help"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -70,6 +71,23 @@ def test_baseline_signal_pipeline(tmp_path, small_config):
     bt = pipe.backtest()
     assert bt.equity_curve.iloc[-1] > 0
     assert pipe.art.train_result is None  # no model trained for baseline
+
+
+def test_feature_cache_is_keyed_by_feature_contract(tmp_path, small_config):
+    small_config.data.raw_dir = str(tmp_path / "data/raw")
+    small_config.data.processed_dir = str(tmp_path / "data/processed")
+    pipe = Pipeline(small_config, base_dir=str(tmp_path))
+    first = pipe.build_features()
+    first_manifest = json.loads(pipe.features_manifest_path.read_text(encoding="utf-8"))
+
+    small_config.features.rsi_window = 10
+    pipe.art.features = None
+    second = pipe.build_features()
+    second_manifest = json.loads(pipe.features_manifest_path.read_text(encoding="utf-8"))
+
+    assert first_manifest["fingerprint"] != second_manifest["fingerprint"]
+    assert "f_rsi_14" in first
+    assert "f_rsi_10" in second
 
 
 def test_cli_version():

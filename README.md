@@ -1,73 +1,138 @@
 # Signalattice
 
-Calibrated probabilistic market forecasting—from point-in-time data to
-decision-readiness evidence.
+**Calibrated market forecasts, tested as decisions rather than celebrated as scores.**
 
-This repository is built as a portfolio-quality internal research platform: modular
-Python package, typed configs, reproducible CLI workflows, meaningful tests, CI, Docker,
-documentation, and generated sample outputs.
+Signalattice is a config-driven research system for asking whether a probabilistic
+forecast is reliable, stable, economically usable, and fast enough for its declared
+decision cadence. It connects chronology-safe panel modeling to model-risk diagnostics,
+cost and delay frontiers, liquidity proxies, inference benchmarks, and an explicit
+`READY` / `NOT_READY` gate.
 
-> Disclaimer: this project is for educational and portfolio purposes only. It is not
-> financial advice and is not intended for live trading. Backtests are simulations and do
-> not guarantee future performance.
+The central artifact is evidence, not a headline backtest. A run records what data was
+used, how each forecast was produced, whether probabilities were calibrated on unseen
+dates, how performance changes under implementation friction, and why a result did or did
+not clear its configured thresholds.
 
-## Why this project exists
+> Signalattice is research software, not financial advice or a live trading system.
+> Synthetic and historical simulations do not establish deployable alpha or future
+> profitability.
 
-Breaking into quant research engineering requires showing more than notebooks. This
-project demonstrates the software and research hygiene expected in a hedge fund, prop
-trading, asset management, or systematic trading environment:
+## Research questions
 
-- reproducible market data ingestion with schema validation and offline fallback
-- leakage-aware feature engineering for time-series and cross-sectional factors
-- walk-forward machine learning with time-series-safe splits
-- vectorized long-only and long/short backtesting with costs and slippage
-- risk analytics, scenario analysis, and portfolio reporting
-- local experiment tracking with dataset hashes, parameters, metrics, artifacts, and git
-  commit metadata where available
-- tests, CI, Docker, pre-commit, docs, and resume positioning material
+Signalattice is built to answer five questions in order:
 
-## Architecture
+1. **Discrimination:** does the model rank future outcomes better than a naive baseline?
+2. **Calibration:** does a forecast of `0.60` occur at roughly a 60% empirical rate?
+3. **Stability:** is evidence consistent across forward-chaining test periods and date-block
+   bootstrap samples?
+4. **Decision value:** does any gross edge survive costs, added delay, turnover, and
+   conservative portfolio constraints?
+5. **Operational fit:** are inference latency and dollar-volume participation compatible
+   with the intended use?
+
+Passing one question never substitutes for another. The readiness gate exposes each
+criterion independently and fails closed on missing or non-finite evidence.
+
+## What makes this project different
+
+[AlphaForge](https://github.com/srgangaram-swe/AlphaForge) explores systematic alpha,
+regimes, portfolio construction, and execution-oriented research. Signalattice focuses on
+a different layer of the stack: calibrated probability estimation, causal panel sequence
+models, forecast diagnostics, model risk, and ForecastOps decision gates. It deliberately
+does not duplicate an order-book simulator, execution engine, or strategy-control API.
+
+## System at a glance
 
 ```mermaid
 flowchart LR
-    CFG[configs/*.yaml] --> CLI[quant-platform CLI]
-    CLI --> INGEST[Data ingestion]
-    INGEST --> VALIDATE[Schema + validation]
-    VALIDATE --> PARQUET[(Parquet price panel)]
-    PARQUET --> FEATURES[Feature pipeline]
-    FEATURES --> MODEL[Walk-forward model]
-    FEATURES --> SIGNALS[Baseline signals]
-    MODEL --> SIGNALS
-    SIGNALS --> BACKTEST[Vectorized backtester]
-    BACKTEST --> RISK[Risk analytics]
-    BACKTEST --> REPORT[Markdown/HTML report]
-    MODEL --> TRACK[Experiment tracker]
-    BACKTEST --> TRACK
-    REPORT --> ARTIFACTS[reports/ + figures]
+    CFG[Typed YAML contract] --> DATA[Source adapters]
+    DATA --> QC[Schema validation + fingerprint]
+    QC --> FEAT[Causal panel features]
+    FEAT --> CV[Date-grouped walk-forward CV]
+    CV --> TAB[Calibrated heterogeneous ensemble]
+    CV --> TCN[Causal panel TCN]
+    TAB --> OOS[Out-of-sample probabilities]
+    TCN --> OOS
+    OOS --> DIAG[Calibration + uncertainty + stability]
+    OOS --> BT[Conservative lagged backtest]
+    BT --> FRICTION[Cost + delay + capacity analysis]
+    OOS --> LAT[Warm inference benchmark]
+    DIAG --> GATE[Decision-readiness gate]
+    FRICTION --> GATE
+    LAT --> GATE
+    GATE --> REPORT[Markdown / HTML evidence report]
 ```
 
-See [docs/architecture.md](docs/architecture.md) for the module-level design.
+Key capabilities include:
 
-## Repository layout
+- typed, fail-fast configuration with deterministic seeds and config-aware data caches;
+- explicit market-data source identity—synthetic data is never silently substituted unless
+  the run opts into that behavior;
+- ticker-local trailing features and whole-date train/test boundaries for panel data;
+- walk-forward or expanding evaluation with an embargo constrained to be at least the
+  forecast horizon;
+- a heterogeneous classifier ensemble with a trailing, date-grouped inner holdout split
+  again into earlier calibrator-fit dates and later log-loss weighting dates;
+- optional causal dilated temporal convolution over per-ticker histories, with chronological
+  validation, early stopping, gradient clipping, deterministic CPU execution, persistence,
+  and gradient-times-input diagnostics;
+- proper probability scores, reliability tables, Brier decomposition, expected calibration
+  error, ROC and precision-recall analysis, selective prediction, prediction-decile returns,
+  fold stability, and date-block bootstrap intervals;
+- long-only and dollar-neutral research portfolios with probability or quantile selection,
+  no-trade bands, position and gross-exposure limits, causal volatility targeting, costs,
+  and explicit execution lag;
+- cost, delay, break-even cost, dollar-volume participation, capacity-proxy, and warm
+  inference latency diagnostics; and
+- unit and integration tests for chronology, candidate/calibrator/weighting separation,
+  portfolio invariants, missing-data failure modes, temporal tensor construction,
+  persistence, and report inputs.
 
-```text
-.
-├── configs/                 # Reproducible run configs
-├── data/                    # Raw/processed/external data dirs with docs and .gitkeep files
-├── docs/                    # Architecture and methodology notes
-├── notebooks/               # Lightweight research walkthrough
-├── reports/                 # Generated reports; example output is committed under reports/example
-├── scripts/                 # Reproducible helper scripts
-├── src/quant_platform/      # Python package
-├── tests/                   # Unit and integration tests
-├── Dockerfile
-├── docker-compose.yml
-├── Makefile
-├── pyproject.toml
-└── .github/workflows/ci.yml
-```
+See [Architecture](docs/architecture.md), [Methodology](docs/methodology.md), and the
+[Validation protocol](docs/validation_protocol.md) for the contracts behind these claims.
 
-## Setup
+## Evidence boundary
+
+The committed example is a deterministic **synthetic engineering experiment**. Its data
+generator contains moderate, declared autocorrelation effects so the pipeline can be tested
+against a known causal signal; setting both autocorrelation coefficients to zero creates a
+null directional process. Recovering that planted structure demonstrates implementation
+behavior, not discovery of a market anomaly.
+
+Signalattice can also evaluate public daily data, but that does not remove vendor,
+survivorship, revision, adjustment, or multiple-testing risk. The project has no broker
+connection, order management, intraday market-impact model, point-in-time constituent
+database, or claim of live P&L.
+
+Every report should therefore be read with its source label and readiness verdict. A
+profitable synthetic backtest that fails calibration or stability remains `NOT_READY`; a
+historical run that passes configured gates is a candidate for deeper research, not an
+authorization to trade.
+
+## Diagnostic report
+
+The generated report combines predictive, economic, and operational evidence. Depending
+on the configured model and available inputs, figures include:
+
+- reliability and score-by-outcome diagrams;
+- ROC and precision-recall curves;
+- selective coverage versus accuracy;
+- prediction-decile forward returns;
+- walk-forward metric and feature-importance stability;
+- calibrated ensemble weights;
+- gross-to-net implementation drag;
+- cost and execution-delay frontiers;
+- AUM participation and capacity proxies;
+- latency/throughput profiles; and
+- equity, drawdown, exposure, turnover, and monthly-return diagnostics.
+
+The reproducible example output lives under [reports/example](reports/example). Generated
+plots are supporting diagnostics; no single plot is treated as proof of tradability.
+
+## Quickstart
+
+Signalattice uses a standard `src/` package layout and exposes both `signalattice` and the
+legacy `quant-platform` console aliases.
 
 ```bash
 python3 -m venv .venv
@@ -76,107 +141,58 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-Optional market data adapters:
+Run the deterministic offline experiment:
+
+```bash
+signalattice run-full-pipeline --config configs/synthetic.yaml --force
+```
+
+Run the public-data configuration after installing source adapters:
 
 ```bash
 python -m pip install -e ".[dev,data]"
+signalattice run-full-pipeline --config configs/example.yaml --force
 ```
 
-The platform runs without network dependencies by falling back to deterministic
-synthetic data.
+Public-data runs fail if the requested source or universe is unavailable. For an explicitly
+synthetic run, set `data.source: synthetic`; opt-in `allow_synthetic_fallback` exists for
+clearly labeled engineering workflows, but it is disabled by default.
 
-## Quickstart
-
-Run the full example pipeline:
+Install optional model backends only when a config requests them:
 
 ```bash
-python -m quant_platform.cli run-full-pipeline --config configs/example.yaml --force
+python -m pip install -e ".[dev,boost]"  # XGBoost / LightGBM
+python -m pip install -e ".[dev,torch]"  # causal TCN
 ```
 
-Or use the installed console script:
+Requested optional backends fail closed when their dependency is absent. Signalattice does
+not silently replace an experiment's declared model with another estimator.
+
+## Workflow
 
 ```bash
-quant-platform run-full-pipeline --config configs/example.yaml --force
+signalattice ingest-data --config configs/example.yaml
+signalattice build-features --config configs/example.yaml
+signalattice train-model --config configs/example.yaml
+signalattice run-backtest --config configs/example.yaml
+signalattice generate-report --config configs/example.yaml
+signalattice list-experiments --config configs/example.yaml
 ```
 
-The example config uses `SPY`, `QQQ`, `AAPL`, `MSFT`, `NVDA`, `JPM`, and `TLT`.
-With optional data dependencies it attempts public market data first; otherwise it uses
-the synthetic fallback and still exercises the full pipeline.
+A full run produces configured equivalents of:
 
-Expected outputs:
-
-- processed panel: `data/processed/price_panel.parquet`
-- feature matrix: `data/processed/features.parquet`
-- report: `reports/example/example_report.md`
-- figures: `reports/example/figures/*.png`
-- experiment tracking DB: `experiments/experiments.sqlite`
-- model bundle: `models/example_model.joblib`
-
-For a guaranteed offline demo:
-
-```bash
-make demo
+```text
+data/raw/{TICKER}.parquet                 source snapshots
+data/processed/price_panel.parquet       validated canonical panel
+data/processed/panel_metadata.json       source, hash, config fingerprint, seed
+data/processed/features.parquet          feature/target matrix
+models/{project}_model.joblib            model + preprocessing + feature contract
+experiments/experiments.sqlite           run metadata and metrics
+reports/{run}/                           report and diagnostic figures
 ```
 
-## CLI commands
-
-```bash
-quant-platform ingest-data --config configs/example.yaml
-quant-platform build-features --config configs/example.yaml
-quant-platform train-model --config configs/example.yaml
-quant-platform run-backtest --config configs/example.yaml
-quant-platform generate-report --config configs/example.yaml
-quant-platform run-full-pipeline --config configs/example.yaml --force
-quant-platform list-experiments --config configs/example.yaml
-```
-
-## Methodology
-
-The platform uses a long-format daily price panel keyed by `(date, ticker)`.
-Features are computed within ticker groups using only trailing information. Targets are
-forward returns and next-period direction labels. Model signals are generated from
-walk-forward out-of-sample predictions and then shifted in the backtester so a signal at
-close `t` earns returns at `t+1`.
-
-Key feature families:
-
-- simple and log returns
-- rolling volatility, realized volatility, and rolling Sharpe
-- moving-average and exponential moving-average ratios
-- RSI, MACD, Bollinger bands
-- momentum, 12-1 momentum, short-horizon reversal, z-scores
-- volume trend features
-- rolling beta to benchmark
-- drawdown and rolling max drawdown
-- cross-sectional ranks and z-scores
-
-Modeling approaches:
-
-- rules-based factor baselines (`momentum`, `ma_crossover`)
-- sklearn classifiers/regressors such as logistic regression, random forest, and gradient boosting
-- optional XGBoost, LightGBM, MLflow, and PyTorch LSTM backends
-
-Backtesting includes:
-
-- long-only and long/short modes
-- equal-weight, rank, and volatility-target sizing
-- transaction costs and slippage in basis points
-- benchmark comparison, equity curve, drawdowns, turnover, monthly returns, and trade summary
-
-Risk analytics include:
-
-- annualized volatility, Sharpe, Sortino, Calmar, CAGR
-- max drawdown, VaR, CVaR, beta, correlation matrix
-- exposure analysis and stress scenarios
-
-## Sample outputs
-
-The committed example report and figures live under [reports/example](reports/example).
-Regenerate them with:
-
-```bash
-bash scripts/run_example_pipeline.sh
-```
+Generated market data, models, and experiment stores are ignored. Only the documented,
+reproducible example evidence is committed.
 
 ## Development
 
@@ -184,45 +200,62 @@ bash scripts/run_example_pipeline.sh
 make test
 make lint
 make typecheck
-make pipeline CONFIG=configs/example.yaml
+make demo
 ```
 
 Docker:
 
 ```bash
 docker compose build
-docker compose run --rm platform run-full-pipeline --config configs/synthetic.yaml
+docker compose run --rm platform run-full-pipeline --config configs/synthetic.yaml --force
 ```
 
-CI runs linting, tests across supported Python versions, and a synthetic end-to-end smoke
-test in GitHub Actions.
+The CI workflow runs static checks, unit/integration tests across supported Python
+versions, and a deterministic end-to-end smoke test. Deep-learning tests are isolated
+behind the optional PyTorch dependency.
 
-## Limitations
+## Repository map
 
-- Daily close-to-close data only; no intraday, order book, borrow, or corporate action audit trail.
-- Free public data can have adjustment and survivorship-bias issues.
-- Transaction costs and slippage are simplified flat bps assumptions.
-- The example universe is fixed and small; it is not a production tradable universe.
-- The platform is designed for research demonstration, not live order execution.
+```text
+configs/                    reproducible experiment contracts
+docs/                       architecture, model/data cards, validation, ADRs
+reports/example/            committed reproducible evidence
+src/quant_platform/data/    ingestion, contracts, validation, synthetic DGP
+src/quant_platform/features feature and target construction
+src/quant_platform/models/  splits, ensemble, TCN, training, diagnostics
+src/quant_platform/backtest conservative vectorized portfolio simulation
+src/quant_platform/evaluation implementation and readiness diagnostics
+src/quant_platform/risk/    performance, tail-risk, exposure, stress analysis
+src/quant_platform/reporting plots and evidence reports
+src/quant_platform/tracking experiment lineage
+tests/                      unit and integration contracts
+```
 
-## Future work
+## Documentation
 
-- survivorship-bias-free universes and point-in-time membership
-- intraday data and event-driven execution simulator
-- factor risk model and portfolio optimization layer
-- purged nested CV and hyperparameter search
-- distributed runs and cloud artifact storage
+- [Architecture](docs/architecture.md)
+- [Methodology](docs/methodology.md)
+- [Model card](docs/model_card.md)
+- [Data card](docs/data_card.md)
+- [Validation protocol](docs/validation_protocol.md)
+- [Backtesting contract](docs/backtesting.md)
+- [Risk metrics](docs/risk_metrics.md)
+- [ADR 0001: probabilistic ForecastOps](docs/adr/0001-probabilistic-forecastops.md)
 
-## Resume bullets
+## Known limitations
 
-- Built a production-style quant research data platform in Python covering ingestion,
-  validation, feature engineering, ML modeling, vectorized backtesting, risk analytics,
-  experiment tracking, reporting, tests, CI, Docker, and docs.
-- Implemented leakage-aware walk-forward ML for cross-sectional return-direction signals
-  with out-of-sample metrics, feature importance, and transaction-cost-aware backtests.
-- Engineered reusable time-series factor pipelines for volatility, momentum, mean reversion,
-  beta, drawdown, volume, and cross-sectional ranking features backed by typed YAML configs.
+- Daily OHLCV bars cannot validate intraday fills, spread, queue position, borrow, or
+  market impact.
+- The public example universe is small and fixed, not survivorship-bias-free or historically
+  point-in-time.
+- Adjusted public data can be revised and lacks an institutional corporate-action audit
+  trail.
+- The capacity calculation is a trailing dollar-volume participation proxy, not an
+  execution simulator.
+- The latency benchmark measures warm local model inference, not feed handling, feature
+  materialization, network transit, risk checks, or order acknowledgement.
+- The current research harness does not establish external replication, paper trading, or
+  live post-trade attribution.
 
-LinkedIn summary: Built an end-to-end quant finance research platform that turns market
-data into validated Parquet datasets, factor features, walk-forward ML signals, cost-aware
-backtests, risk reports, experiment records, and reproducible CI-tested artifacts.
+The [Validation protocol](docs/validation_protocol.md) describes what additional evidence
+would be required before any production or capital-allocation discussion.

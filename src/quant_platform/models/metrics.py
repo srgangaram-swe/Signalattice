@@ -16,10 +16,13 @@ logger = get_logger(__name__)
 def classification_metrics(
     y_true: np.ndarray, y_pred: np.ndarray, y_proba: np.ndarray | None = None
 ) -> dict[str, float]:
-    """Accuracy, precision, recall, F1 and (if probabilities given) ROC-AUC."""
+    """Return discrimination, threshold, and proper probability scores."""
     from sklearn.metrics import (
         accuracy_score,
+        average_precision_score,
+        balanced_accuracy_score,
         f1_score,
+        matthews_corrcoef,
         precision_score,
         recall_score,
         roc_auc_score,
@@ -29,17 +32,29 @@ def classification_metrics(
     y_pred = np.asarray(y_pred).astype(int)
     out = {
         "accuracy": float(accuracy_score(y_true, y_pred)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
         "precision": float(precision_score(y_true, y_pred, zero_division=0)),
         "recall": float(recall_score(y_true, y_pred, zero_division=0)),
         "f1": float(f1_score(y_true, y_pred, zero_division=0)),
+        "matthews_corrcoef": float(matthews_corrcoef(y_true, y_pred)),
     }
     if y_proba is not None and len(np.unique(y_true)) > 1:
         try:
             out["roc_auc"] = float(roc_auc_score(y_true, y_proba))
+            out["average_precision"] = float(average_precision_score(y_true, y_proba))
+            from quant_platform.models.diagnostics import (
+                expected_calibration_error,
+                proper_scoring_rules,
+            )
+
+            out.update(proper_scoring_rules(y_true, y_proba))
+            out["expected_calibration_error"] = expected_calibration_error(y_true, y_proba)
         except ValueError:  # pragma: no cover - degenerate fold
             out["roc_auc"] = float("nan")
+            out["average_precision"] = float("nan")
     else:
         out["roc_auc"] = float("nan")
+        out["average_precision"] = float("nan")
     return out
 
 

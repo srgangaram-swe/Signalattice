@@ -1,12 +1,13 @@
 """Ingestion orchestration: fetch → validate → persist → load.
 
 This module is the single entry point used by the CLI and pipeline. It handles
-source selection (with graceful fallback to synthetic data), schema coercion,
-validation, derived return columns and Parquet persistence.
+source selection with explicit fallback policy, schema coercion, validation,
+derived return columns and fingerprinted Parquet persistence.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -18,11 +19,12 @@ from quant_platform.data.sources import DataSourceError, fetch_stooq, fetch_yfin
 from quant_platform.data.synthetic import generate_synthetic_panel
 from quant_platform.data.validation import validate_price_panel
 from quant_platform.logging_utils import get_logger
-from quant_platform.utils import ensure_dir, hash_dataframe, resolve_path
+from quant_platform.utils import ensure_dir, hash_dataframe, hash_dict, resolve_path
 
 logger = get_logger(__name__)
 
 PROCESSED_FILENAME = "price_panel.parquet"
+METADATA_FILENAME = "panel_metadata.json"
 
 
 def _add_return_columns(df: pd.DataFrame, price_field: str) -> pd.DataFrame:
@@ -43,14 +45,19 @@ def _add_return_columns(df: pd.DataFrame, price_field: str) -> pd.DataFrame:
     return out
 
 
-def _fetch_raw(config: DataConfig) -> tuple[pd.DataFrame, str]:
-    """Fetch raw data according to the configured source, with fallback.
+def _fetch_raw(config: DataConfig, *, seed: int) -> tuple[pd.DataFrame, str]:
+    """Fetch raw data according to the configured, fail-closed source policy.
 
     Returns a tuple of ``(panel, source_used)``.
     """
     source = config.source
     tickers = config.tickers
-    order: list[str] = ["yfinance", "stooq", "synthetic"] if source == "auto" else [source]
+    if source == "auto":
+        order: list[str] = ["yfinance", "stooq"]
+        if config.allow_synthetic_fallback:
+            order.append("synthetic")
+    else:
+        order = [source]
 
     last_error: Exception | None = None
     for src in order:
@@ -76,10 +83,14 @@ def _fetch_raw(config: DataConfig) -> tuple[pd.DataFrame, str]:
                     tickers,
                     benchmark=config.benchmark,
                     config=config.synthetic,
-                    seed=42,
+                    seed=seed,
                 )
             else:  # pragma: no cover - guarded by config validation
                 raise DataSourceError(f"unknown source '{src}'")
+            returned = set(panel[TICKER_COL].astype(str).str.upper().unique())
+            missing = sorted(set(tickers).difference(returned))
+            if missing:
+                raise DataSourceError(f"source '{src}' omitted requested tickers: {missing}")
             logger.info("Ingested data using source='%s'", src)
             return panel, src
         except DataSourceError as exc:
@@ -91,9 +102,17 @@ def _fetch_raw(config: DataConfig) -> tuple[pd.DataFrame, str]:
     if source != "auto":
         raise DataSourceError(
             f"data source '{source}' failed: {last_error}. "
-            "Set data.source='synthetic' or 'auto' for an offline fallback."
+            "Set data.source='synthetic' for an explicit offline run."
         )
-    raise DataSourceError(f"all data sources failed; last error: {last_error}")
+    fallback_note = (
+        " Enable data.allow_synthetic_fallback only when a clearly labelled synthetic "
+        "engineering run is acceptable."
+        if not config.allow_synthetic_fallback
+        else ""
+    )
+    raise DataSourceError(
+        f"all configured data sources failed; last error: {last_error}.{fallback_note}"
+    )
 
 
 def ingest(
@@ -101,6 +120,7 @@ def ingest(
     *,
     base_dir: str | None = None,
     force: bool = False,
+    seed: int = 42,
 ) -> pd.DataFrame:
     """Ingest market data and persist a validated, return-augmented panel.
 
@@ -123,12 +143,22 @@ def ingest(
     processed_dir = ensure_dir(resolve_path(config.processed_dir, base_dir))
     raw_dir = ensure_dir(resolve_path(config.raw_dir, base_dir))
     out_path = processed_dir / PROCESSED_FILENAME
+    metadata_path = processed_dir / METADATA_FILENAME
+    config_hash = hash_dict({"data": config.model_dump(mode="json"), "seed": seed})
 
     if out_path.exists() and not force:
-        logger.info("Loading cached processed panel from %s", out_path)
-        return load_processed(processed_dir)
+        metadata: dict[str, object] = {}
+        if metadata_path.exists():
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                logger.warning("Ignoring unreadable panel metadata at %s", metadata_path)
+        if metadata.get("config_hash") == config_hash:
+            logger.info("Loading fingerprint-matched processed panel from %s", out_path)
+            return load_processed(processed_dir)
+        logger.info("Cached panel fingerprint is stale; rebuilding %s", out_path)
 
-    panel, source_used = _fetch_raw(config)
+    panel, source_used = _fetch_raw(config, seed=seed)
     panel = coerce_panel_dtypes(panel)
 
     # Drop fully-empty rows and clip the date window.
@@ -139,7 +169,10 @@ def ingest(
 
     # Persist raw per-ticker parquet (audit trail / re-use).
     for ticker, g in panel.groupby(TICKER_COL):
-        g.to_parquet(raw_dir / f"{ticker}.parquet", index=False)
+        raw_path = raw_dir / f"{ticker}.parquet"
+        raw_tmp = raw_path.with_suffix(".tmp.parquet")
+        g.to_parquet(raw_tmp, index=False)
+        raw_tmp.replace(raw_path)
 
     # Validate before deriving features.
     report = validate_price_panel(
@@ -151,7 +184,9 @@ def ingest(
     panel = _add_return_columns(panel, config.price_field)
 
     # Persist processed panel + a small metadata sidecar.
-    panel.to_parquet(out_path, index=False)
+    panel_tmp = out_path.with_suffix(".tmp.parquet")
+    panel.to_parquet(panel_tmp, index=False)
+    panel_tmp.replace(out_path)
     meta = {
         "source": source_used,
         "tickers": sorted(panel[TICKER_COL].unique().tolist()),
@@ -160,8 +195,13 @@ def ingest(
         "date_max": str(panel[DATE_COL].max().date()),
         "price_field": config.price_field,
         "data_hash": hash_dataframe(panel),
+        "config_hash": config_hash,
+        "seed": seed,
+        "synthetic": source_used == "synthetic",
     }
-    pd.Series(meta).to_json(processed_dir / "panel_metadata.json", indent=2)
+    metadata_tmp = metadata_path.with_suffix(".tmp.json")
+    metadata_tmp.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+    metadata_tmp.replace(metadata_path)
     logger.info("Saved processed panel to %s (hash=%s)", out_path, meta["data_hash"])
     return panel
 

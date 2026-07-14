@@ -8,7 +8,7 @@ return the output path, and never call ``plt.show()``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import matplotlib
 
@@ -16,9 +16,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
+from matplotlib.figure import Figure  # noqa: E402
 
 from quant_platform.data.schema import DATE_COL, TICKER_COL  # noqa: E402
 from quant_platform.logging_utils import get_logger  # noqa: E402
+from quant_platform.reporting.diagnostic_plots import (  # noqa: E402
+    generate_diagnostic_figures,
+)
 from quant_platform.utils import ensure_dir  # noqa: E402
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -40,7 +44,7 @@ plt.rcParams.update(
 )
 
 
-def _save(fig, path: Path) -> Path:
+def _save(fig: Figure, path: Path) -> Path:
     ensure_dir(path.parent)
     fig.tight_layout()
     fig.savefig(path, bbox_inches="tight")
@@ -94,11 +98,17 @@ def plot_rolling_volatility(returns: pd.Series, path: Path, *, window: int = 63)
 def plot_equity_curve(equity: pd.Series, benchmark_equity: pd.Series, path: Path) -> Path:
     """Strategy vs benchmark equity curves (log-scale y)."""
     fig, ax = plt.subplots()
-    ax.plot(equity.index, equity.values, label="Strategy", linewidth=1.5, color="#2e7d32")
+    ax.plot(
+        equity.index,
+        equity.to_numpy(dtype=float),
+        label="Strategy",
+        linewidth=1.5,
+        color="#2e7d32",
+    )
     if benchmark_equity is not None and len(benchmark_equity):
         ax.plot(
             benchmark_equity.index,
-            benchmark_equity.values,
+            benchmark_equity.to_numpy(dtype=float),
             label="Benchmark (buy & hold)",
             linewidth=1.2,
             color="#888888",
@@ -114,7 +124,13 @@ def plot_drawdown(drawdown: pd.Series, path: Path) -> Path:
     """Underwater (drawdown) plot."""
     dd = pd.Series(drawdown).dropna()
     fig, ax = plt.subplots()
-    ax.fill_between(dd.index, dd.values * 100.0, 0.0, color="#c0392b", alpha=0.4)
+    ax.fill_between(
+        dd.index,
+        dd.to_numpy(dtype=float) * 100.0,
+        0.0,
+        color="#c0392b",
+        alpha=0.4,
+    )
     ax.set_title("Drawdown (underwater plot)")
     ax.set_ylabel("Drawdown (%)")
     return _save(fig, path)
@@ -126,7 +142,7 @@ def plot_rolling_sharpe(returns: pd.Series, path: Path, *, window: int = 126) ->
 
     rs = rolling_sharpe(pd.Series(returns).dropna(), window=window)
     fig, ax = plt.subplots()
-    ax.plot(rs.index, rs.values, color="#6a3d9a", linewidth=1.2)
+    ax.plot(rs.index, rs.to_numpy(dtype=float), color="#6a3d9a", linewidth=1.2)
     ax.axhline(0.0, color="black", linewidth=0.8)
     ax.set_title(f"Rolling Sharpe ratio ({window}d)")
     ax.set_ylabel("Annualised Sharpe")
@@ -137,13 +153,13 @@ def plot_feature_importance(importances: pd.Series, path: Path, *, top_n: int = 
     """Horizontal bar chart of the top-N feature importances."""
     imp = pd.Series(importances).dropna().head(top_n)[::-1]
     fig, ax = plt.subplots(figsize=(10, max(4, 0.35 * len(imp))))
-    ax.barh(imp.index, imp.values, color="#3b6ea5")
+    ax.barh(imp.index, imp.to_numpy(dtype=float), color="#3b6ea5")
     ax.set_title(f"Top {len(imp)} feature importances")
     ax.set_xlabel("Importance")
     return _save(fig, path)
 
 
-def plot_confusion_matrix(y_true, y_pred, path: Path) -> Path:
+def plot_confusion_matrix(y_true: Any, y_pred: Any, path: Path) -> Path:
     """Confusion matrix heatmap for the binary direction classifier."""
     from sklearn.metrics import confusion_matrix
 
@@ -171,7 +187,7 @@ def plot_confusion_matrix(y_true, y_pred, path: Path) -> Path:
     return _save(fig, path)
 
 
-def plot_roc_curve(y_true, y_proba, path: Path) -> Path:
+def plot_roc_curve(y_true: Any, y_proba: Any, path: Path) -> Path:
     """ROC curve with AUC annotation."""
     from sklearn.metrics import roc_auc_score, roc_curve
 
@@ -230,6 +246,7 @@ def generate_all_figures(
     correlation: pd.DataFrame,
     figures_dir: Path,
     task: str = "classification",
+    decision_analysis: dict[str, Any] | None = None,
 ) -> dict[str, Path]:
     """Generate the full set of report figures and return a name -> path map."""
     figures_dir = ensure_dir(figures_dir)
@@ -270,5 +287,13 @@ def generate_all_figures(
             figs["roc_curve"] = plot_roc_curve(
                 preds["y_true"], preds["score"], figures_dir / "roc_curve.png"
             )
+    figs.update(
+        generate_diagnostic_figures(
+            train_result,
+            backtest,
+            decision_analysis or {},
+            figures_dir,
+        )
+    )
     logger.info("Generated %d figures in %s", len(figs), figures_dir)
     return figs

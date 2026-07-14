@@ -135,6 +135,22 @@ def run_full_pipeline(
     )
     typer.echo(f"Strategy CAGR   : {bt.stats['cagr'] * 100:.2f}%")
     typer.echo(f"Max drawdown    : {bt.stats['max_drawdown'] * 100:.2f}%")
+    if art.train_result is not None:
+        metrics = art.train_result.metrics
+        typer.echo(f"Forecast ROC AUC: {metrics.get('roc_auc', float('nan')):.3f}")
+        typer.echo(
+            "Forecast ECE    : " f"{metrics.get('expected_calibration_error', float('nan')):.3f}"
+        )
+    decision = art.decision_analysis
+    typer.echo(
+        "Break-even cost   : "
+        f"{decision.get('break_even_one_way_cost_bps', float('nan')):.2f} bps one way"
+    )
+    gate = decision.get("readiness_gate", {})
+    typer.echo(
+        f"Readiness verdict: {gate.get('verdict', 'NOT_EVALUATED')} "
+        f"({gate.get('passed_count', 0)}/{gate.get('criterion_count', 0)} gates)"
+    )
     typer.echo(f"Report          : {art.report_path}")
     typer.echo(f"Figures         : {pipe.figures_dir} ({len(art.figures)} plots)")
 
