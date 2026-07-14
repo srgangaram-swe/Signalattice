@@ -2,10 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, prod, dev]
   pull_request:
-    branches: [main, master]
+    branches: [main, prod, dev]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

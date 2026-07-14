@@ -1,4 +1,4 @@
-# Quant Research Data Platform — developer convenience targets.
+# Signalattice — developer convenience targets.
 # Run `make help` for the list.
 
 .DEFAULT_GOAL := help
@@ -87,7 +87,7 @@ clean-data: ## Remove generated data, reports, experiments (keeps .gitkeep)
 
 .PHONY: docker-build
 docker-build: ## Build the Docker image
-	docker build -t quant-research-data-platform:latest .
+	docker build -t signalattice:latest .
 
 .PHONY: docker-demo
 docker-demo: ## Run the synthetic demo inside Docker

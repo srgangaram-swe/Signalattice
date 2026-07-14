@@ -75,7 +75,7 @@ def test_baseline_signal_pipeline(tmp_path, small_config):
 def test_cli_version():
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "quant-research-data-platform" in result.stdout
+    assert "signalattice" in result.stdout
 
 
 def test_cli_run_full_pipeline(tmp_path):

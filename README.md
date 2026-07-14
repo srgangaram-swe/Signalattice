@@ -1,7 +1,7 @@
-# quant-research-data-platform
+# Signalattice
 
-Production-style research platform for quant finance data engineering, feature research,
-machine learning, backtesting, risk analytics, experiment tracking, and reporting.
+Calibrated probabilistic market forecasting—from point-in-time data to
+decision-readiness evidence.
 
 This repository is built as a portfolio-quality internal research platform: modular
 Python package, typed configs, reproducible CLI workflows, meaningful tests, CI, Docker,

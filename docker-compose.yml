@@ -6,7 +6,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: quant-research-data-platform:latest
+    image: signalattice:latest
     container_name: qrdp
     environment:
       QRDP_LOG_LEVEL: ${QRDP_LOG_LEVEL:-INFO}

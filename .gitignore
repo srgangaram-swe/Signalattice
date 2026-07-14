@@ -81,3 +81,6 @@ models/*.pkl
 .vscode/
 *.swp
 *~
+
+# Local AI collaboration context (never commit)
+/ai.md

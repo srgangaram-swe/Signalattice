@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "quant-research-data-platform"
+name = "signalattice"
 version = "0.1.0"
-description = "An end-to-end quantitative research data platform: ingestion, features, factor research, ML, backtesting, risk analytics, and experiment tracking."
+description = "Calibrated probabilistic market forecasting from point-in-time data to decision-readiness evidence."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -77,12 +77,13 @@ dev = [
 ]
 
 [project.scripts]
+signalattice = "quant_platform.cli:app"
 quant-platform = "quant_platform.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/srgangaram-swe/Quant-Finance-Data-Pipeline-Project"
-Repository = "https://github.com/srgangaram-swe/Quant-Finance-Data-Pipeline-Project"
-Documentation = "https://github.com/srgangaram-swe/Quant-Finance-Data-Pipeline-Project/tree/main/docs"
+Homepage = "https://github.com/srgangaram-swe/Signalattice"
+Repository = "https://github.com/srgangaram-swe/Signalattice"
+Documentation = "https://github.com/srgangaram-swe/Signalattice/tree/main/docs"
 
 [tool.setuptools.packages.find]
 where = ["src"]

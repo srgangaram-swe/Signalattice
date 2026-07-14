@@ -1,4 +1,4 @@
-"""Quant Research Data Platform.
+"""Signalattice probabilistic forecasting platform.
 
 An end-to-end research platform for quantitative finance covering data
 ingestion, time-series feature engineering, factor research, machine-learning

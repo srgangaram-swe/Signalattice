@@ -25,7 +25,7 @@ from quant_platform.pipeline import Pipeline
 
 app = typer.Typer(
     name="quant-platform",
-    help="Quant Research Data Platform — ingest, features, models, backtest, risk, reports.",
+    help="Signalattice — probabilistic forecasts, decision evidence, and research reports.",
     add_completion=False,
     no_args_is_help=True,
 )
@@ -50,14 +50,14 @@ def _load(config: str, log_level: str | None) -> Pipeline:
 
 @app.callback()
 def _main() -> None:
-    """Quant Research Data Platform CLI."""
+    """Signalattice command-line interface."""
     configure_logging()
 
 
 @app.command()
 def version() -> None:
     """Print the package version."""
-    typer.echo(f"quant-research-data-platform {__version__}")
+    typer.echo(f"signalattice {__version__}")
 
 
 @app.command("ingest-data")
