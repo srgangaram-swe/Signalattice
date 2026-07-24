@@ -1,66 +1,132 @@
 # Architecture
 
-The platform is organized around a config-driven research workflow. Each stage can run
-independently through the CLI, while `Pipeline.run_full()` executes the complete DAG in a
-single tracked experiment.
+Signalattice is a config-driven research DAG with explicit contracts between data,
+forecasting, decision simulation, and evidence generation. Stages can run independently
+from the CLI; `Pipeline.run_full()` executes them in one tracked experiment.
+
+## Component flow
 
 ```mermaid
 flowchart TD
     A[AppConfig YAML] --> B[CLI / Pipeline]
-    B --> C[Data sources: yfinance, Stooq, synthetic]
-    C --> D[Canonical OHLCV schema]
-    D --> E[Validation report]
-    E --> F[(data/processed/price_panel.parquet)]
-    F --> G[Feature pipeline]
-    G --> H[(data/processed/features.parquet)]
-    H --> I[Walk-forward model training]
-    H --> J[Rules-based baseline signals]
-    I --> K[OOS signal frame]
-    J --> K
-    K --> L[Vectorized backtester]
-    L --> M[Risk analytics]
-    L --> N[Plots]
-    I --> O[Experiment tracker]
-    M --> O
-    N --> P[Markdown/HTML report]
+    B --> C[Yahoo, Stooq, or explicit synthetic source]
+    C --> D[Canonical OHLCV panel]
+    D --> E[Schema and market-data validation]
+    E --> F[Atomic Parquet + metadata fingerprint]
+    F --> G[Trailing feature and target pipeline]
+    G --> H[Feature-manifest fingerprint]
+    H --> I[Whole-date walk-forward splits]
+    I --> J[Tabular candidate models]
+    I --> K[Causal per-ticker TCN]
+    J --> L[Earlier calibrator-fit dates]
+    L --> W[Later independent weighting dates]
+    W --> M[Out-of-sample probabilities]
+    K --> M
+    M --> N[Forecast diagnostics]
+    M --> O[Conservative lagged backtest]
+    O --> P[Risk and implementation diagnostics]
+    M --> Q[Warm inference benchmark]
+    N --> R[Decision-readiness gate]
+    P --> R
+    Q --> R
+    R --> S[Markdown / HTML report + figures]
+    S --> T[Experiment tracker]
 ```
 
 ## Core packages
 
-- `quant_platform.config`: Pydantic models for typed YAML configuration and environment overrides.
-- `quant_platform.data`: source adapters, schema coercion, validation, ingestion, and Parquet loading.
-- `quant_platform.features`: technical indicators, cross-sectional transforms, feature matrix, and targets.
-- `quant_platform.models`: estimator factory, time-series splits, walk-forward training, metrics, and optional LSTM.
-- `quant_platform.backtest`: vectorized cross-sectional portfolio engine with costs and slippage.
-- `quant_platform.risk`: performance, drawdown, VaR, CVaR, beta, exposures, and stress tests.
-- `quant_platform.tracking`: SQLite, JSON, MLflow, and no-op experiment tracking.
-- `quant_platform.reporting`: plots and self-contained Markdown/HTML run reports.
-- `quant_platform.cli`: Typer commands for stage-by-stage or full-pipeline execution.
+- `quant_platform.config`: Pydantic contracts for YAML configuration and selected
+  environment overrides.
+- `quant_platform.data`: source adapters, canonical schema, quality validation, explicit
+  synthetic data generation, atomic persistence, and cache fingerprints.
+- `quant_platform.features`: ticker-local trailing features, same-date cross-sectional
+  transforms, forward targets, and the persisted feature manifest.
+- `quant_platform.models`: panel-aware splits, estimator construction, chronological
+  calibration, heterogeneous ensembling, causal temporal convolution, walk-forward
+  training, probability diagnostics, and model persistence.
+- `quant_platform.backtest`: vectorized long-only or long/short decision simulation with
+  conservative timing, turnover costs, no-trade bands, and portfolio limits.
+- `quant_platform.evaluation`: cost/delay frontiers, break-even costs, dollar-volume
+  participation, warm inference benchmarks, and independent readiness criteria.
+- `quant_platform.risk`: performance, drawdown, VaR/CVaR, beta, exposures, correlations,
+  and scenario calculations.
+- `quant_platform.tracking`: SQLite, JSON, MLflow, and no-op experiment backends.
+- `quant_platform.reporting`: diagnostic figures and self-contained run reports.
+- `quant_platform.cli`: Typer commands for individual stages and full runs.
 
 ## Data contracts
 
-The canonical price panel is long format:
+The canonical price panel is long format with a unique `(date, ticker)` key:
 
 ```text
 date | ticker | open | high | low | close | adj_close | volume | return | log_return
 ```
 
-The feature matrix preserves the same keys and adds:
+The feature matrix preserves the key and adds:
 
-- `f_*` columns for features
-- `target_forward_return`
-- `target_direction`
+```text
+f_* | target_forward_return | target_direction
+```
 
-This makes downstream selection explicit and reduces leakage risk.
+Feature selection is prefix-based and explicit. Identifier, target, and future-return
+columns are not inferred as model inputs. Temporal inputs are constructed as
+`[sample, time, feature]` tensors from the history of the same ticker; sequence metadata
+retains the prediction row and contributing history rows.
 
-## Artifact flow
+The out-of-sample prediction frame is the sole model signal accepted by the model-backed
+backtest:
 
-- raw per-ticker parquet: `data/raw/*.parquet`
-- processed panel: `data/processed/price_panel.parquet`
-- feature matrix: `data/processed/features.parquet`
-- model bundle: `models/{project_name}_model.joblib`
-- report and plots: configured under `reports/`
-- experiment records: `experiments/experiments.sqlite` or JSON files
+```text
+date | ticker | y_true | forward_return | score | fold | candidate_*
+```
 
-Generated data and models are gitignored. The example report under `reports/example/` is
-committed as a portfolio artifact.
+`score` is `P(up)` for classification or a point forecast for regression. Candidate
+columns are present for the calibrated ensemble when available.
+
+## Invariants
+
+| Boundary | Enforced invariant |
+|---|---|
+| Data source | All requested tickers must be returned; synthetic substitution is explicit and labeled. |
+| Cache | Reuse requires a matching data/config/seed fingerprint. |
+| Panel | Keys are unique and prices, OHLC bounds, volume, and minimum history are validated. |
+| Features | Rolling inputs are trailing; cross-sectional transforms use only the same date. |
+| Outer evaluation | Entire dates move together and every test date is after training plus embargo. |
+| Ensemble selection | Candidate fit dates precede calibrator-fit dates; independent weighting dates follow before embargo and outer test. |
+| Temporal model | Every history element belongs to the sample ticker and occurs no later than the prediction row. |
+| Backtest | Close-derived decisions incur at least the configured two-row execution lag. |
+| Portfolio | Per-name and gross limits are re-applied after volatility scaling; missing held returns raise. |
+| Readiness | Missing or non-finite evidence fails its criterion; there is no compensating weighted score. |
+
+These invariants are executable contracts covered by unit or integration tests, not just
+diagram annotations.
+
+## Artifact lineage
+
+Typical outputs are:
+
+- raw per-ticker snapshots: `data/raw/*.parquet`;
+- immutable licensed-provider snapshots: `data/vendor/nasdaq-data-link/`;
+- versioned AlphaForge exchange bundles: `data/signal-foundry-bundles/<bundle-id>/`;
+- panel and source metadata: `data/processed/price_panel.parquet` and
+  `panel_metadata.json`;
+- feature matrix and manifest: `data/processed/features.parquet` and its fingerprint
+  sidecar;
+- persisted preprocessing/model bundle: `models/{project_name}_model.joblib`;
+- report and figures: the configured `reports/` path; and
+- experiment metadata: SQLite, JSON, or MLflow according to configuration.
+
+Data and model artifacts are ignored because public-vendor redistribution and stale binary
+outputs are poor reproducibility mechanisms. The repository commits only a documented
+example report that can be regenerated from its config and seed.
+
+## Deployment boundary
+
+Signalattice stops at research decision-readiness. It now implements a bounded historical
+Nasdaq Data Link adapter and a versioned as-of dataset exchange contract; neither is a
+real-time market-data feed handler or proof of complete point-in-time history. It does not
+implement a general feature store, portfolio optimizer, broker adapter, order management
+system, pre-trade risk service, or post-trade ledger. Its latency result covers warm model
+inference only. Its capacity result covers trailing dollar-volume participation only.
+Those exclusions are intentional and remain visible in the report and
+[data card](data_card.md).

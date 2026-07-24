@@ -10,7 +10,7 @@ from quant_platform.config import ModelConfig
 from quant_platform.models.factory import build_estimator
 from quant_platform.models.metrics import classification_metrics, regression_metrics
 from quant_platform.models.splits import TimeSeriesSplitter
-from quant_platform.models.train import walk_forward_train
+from quant_platform.models.train import _fit_temporal_scaler, walk_forward_train
 
 
 def _panel_dates(n_dates=400, n_tickers=5):
@@ -62,10 +62,13 @@ def test_factory_classification(mtype):
     assert hasattr(est, "predict")
 
 
-def test_factory_xgboost_falls_back_when_absent():
+def test_factory_xgboost_fails_closed_when_absent(monkeypatch):
+    from quant_platform.models import factory
+
+    monkeypatch.setattr(factory, "_has_module", lambda _name: False)
     cfg = ModelConfig(task="classification", type="xgboost")
-    est = build_estimator(cfg, seed=1)  # should not raise even without xgboost
-    assert hasattr(est, "fit")
+    with pytest.raises(ImportError, match="signalattice.*boost"):
+        build_estimator(cfg, seed=1)
 
 
 def test_classification_metrics_keys():
@@ -102,3 +105,46 @@ def test_walk_forward_predictions_are_out_of_sample(feature_frame, app_config):
     pred_dates = pd.to_datetime(result.predictions["date"])
     all_dates = pd.to_datetime(feature_frame["date"])
     assert pred_dates.min() > all_dates.min()
+
+
+def test_calibrated_ensemble_integrates_with_walk_forward(feature_frame, app_config):
+    raw = app_config.model.model_dump()
+    raw.update(
+        {
+            "type": "ensemble",
+            "ensemble": {
+                "candidates": ["logistic", "gradient_boosting"],
+                "candidate_params": {
+                    "gradient_boosting": {
+                        "n_estimators": 20,
+                        "max_depth": 2,
+                        "learning_rate": 0.05,
+                    }
+                },
+                "calibration_fraction": 0.2,
+                "min_calibration_dates": 20,
+            },
+        }
+    )
+    result = walk_forward_train(feature_frame, ModelConfig.model_validate(raw), seed=9)
+
+    assert {"candidate_logistic", "candidate_gradient_boosting"}.issubset(
+        result.predictions.columns
+    )
+    assert "brier_score" in result.metrics
+    assert "calibration_table" in result.extra
+    assert np.isclose(sum(result.extra["ensemble_weights"].values()), 1.0)
+    assert np.isclose(result.feature_importances.sum(), 1.0)
+
+
+def test_temporal_scaler_excludes_chronological_validation_tail():
+    frame = pd.DataFrame(
+        {
+            "date": pd.bdate_range("2025-01-01", periods=10),
+            "f_signal": [0.0] * 8 + [100.0, 100.0],
+        }
+    )
+
+    scaler = _fit_temporal_scaler(frame, ["f_signal"], validation_fraction=0.2)
+
+    assert np.isclose(scaler.mean_[0], 0.0)

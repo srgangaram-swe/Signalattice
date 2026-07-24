@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -70,7 +70,7 @@ class RunContext:
             "experiment": self.experiment,
             "name": self.name,
             "started_at": self.started_at,
-            "ended_at": datetime.now(timezone.utc).isoformat(),
+            "ended_at": datetime.now(UTC).isoformat(),
             "status": self.status,
             "git_commit": self.git_commit,
             "data_hash": self.data_hash,
@@ -98,7 +98,7 @@ class ExperimentTracker:
             run_id=uuid.uuid4().hex[:12],
             experiment=self.config.experiment_name,
             name=name,
-            started_at=datetime.now(timezone.utc).isoformat(),
+            started_at=datetime.now(UTC).isoformat(),
             git_commit=git_commit_hash(),
         )
         logger.info("[%s] started run '%s' (id=%s)", self.backend, name, ctx.run_id)
@@ -238,7 +238,7 @@ class MLflowTracker(ExperimentTracker):
             run_id=uuid.uuid4().hex[:12],
             experiment=self.config.experiment_name,
             name=name,
-            started_at=datetime.now(timezone.utc).isoformat(),
+            started_at=datetime.now(UTC).isoformat(),
             git_commit=git_commit_hash(),
         )
         with mlflow.start_run(run_name=name):

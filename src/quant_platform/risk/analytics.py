@@ -23,7 +23,8 @@ def rolling_sharpe(
     r = pd.Series(returns).astype(float)
     mean = r.rolling(window, min_periods=max(2, window // 2)).mean()
     std = r.rolling(window, min_periods=max(2, window // 2)).std()
-    return (mean / std.replace(0.0, np.nan)) * np.sqrt(periods_per_year)
+    result = (mean / std.replace(0.0, np.nan)) * np.sqrt(periods_per_year)
+    return pd.Series(result, index=r.index, dtype=float)
 
 
 def exposure_summary(weights: pd.DataFrame) -> pd.DataFrame:

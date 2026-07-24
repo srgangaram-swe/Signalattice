@@ -52,8 +52,9 @@ def ma_crossover_signal(features: pd.DataFrame, fast: int = 50, slow: int = 200)
         if len(ma_cols) < 2:
             raise ValueError("ma_crossover requires at least two MA-ratio features")
         fast_col, slow_col = ma_cols[0], ma_cols[-1]
-    diff = features[fast_col] - features[slow_col]
-    return np.sign(diff).fillna(0.0).rename("signal")
+    diff = features[fast_col].to_numpy(dtype=float) - features[slow_col].to_numpy(dtype=float)
+    signal = pd.Series(np.sign(diff), index=features.index, dtype=float)
+    return signal.fillna(0.0).rename("signal")
 
 
 def mean_reversion_signal(features: pd.DataFrame) -> pd.Series:

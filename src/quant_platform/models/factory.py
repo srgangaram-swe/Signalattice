@@ -1,8 +1,8 @@
 """Model factory: build an sklearn-compatible estimator from config.
 
-Gradient-boosting backends (XGBoost / LightGBM) are optional; if they are not
-installed the factory falls back to scikit-learn's :class:`GradientBoosting*`
-with a clear warning, so the platform always runs.
+Gradient-boosting backends (XGBoost / LightGBM) are optional and fail closed
+when requested but unavailable. Silently substituting another estimator makes
+experiment identity and persisted model metadata untrustworthy.
 """
 
 from __future__ import annotations
@@ -10,9 +10,6 @@ from __future__ import annotations
 from typing import Any
 
 from quant_platform.config import ModelConfig
-from quant_platform.logging_utils import get_logger
-
-logger = get_logger(__name__)
 
 
 def _has_module(name: str) -> bool:
@@ -60,7 +57,7 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
 }
 
 
-def build_estimator(config: ModelConfig, *, seed: int = 42):
+def build_estimator(config: ModelConfig, *, seed: int = 42) -> Any:
     """Construct an unfitted estimator for the configured ``task`` and ``type``.
 
     Parameters
@@ -120,8 +117,7 @@ def build_estimator(config: ModelConfig, *, seed: int = 42):
             if task == "classification":
                 return xgb.XGBClassifier(random_state=seed, eval_metric="logloss", **params)
             return xgb.XGBRegressor(random_state=seed, **params)
-        logger.warning("xgboost not installed; falling back to sklearn GradientBoosting")
-        return build_estimator(config.model_copy(update={"type": "gradient_boosting"}), seed=seed)
+        raise ImportError("model.type='xgboost' requires `pip install 'signalattice[boost]'`")
 
     if mtype == "lightgbm":
         if _has_module("lightgbm"):
@@ -130,17 +126,19 @@ def build_estimator(config: ModelConfig, *, seed: int = 42):
             if task == "classification":
                 return lgb.LGBMClassifier(random_state=seed, **params)
             return lgb.LGBMRegressor(random_state=seed, **params)
-        logger.warning("lightgbm not installed; falling back to sklearn GradientBoosting")
-        return build_estimator(config.model_copy(update={"type": "gradient_boosting"}), seed=seed)
+        raise ImportError("model.type='lightgbm' requires `pip install 'signalattice[boost]'`")
 
-    if mtype == "lstm":
-        from quant_platform.models.torch_lstm import build_lstm_estimator
+    if mtype in {"lstm", "tcn"}:
+        from quant_platform.models.torch_lstm import build_temporal_estimator
 
-        return build_lstm_estimator(config, seed=seed)
+        return build_temporal_estimator(config, seed=seed)
+
+    if mtype == "ensemble":
+        raise ValueError("ensemble construction is handled by the walk-forward training harness")
 
     raise ValueError(f"Unknown model type '{mtype}'")
 
 
-def supports_proba(estimator) -> bool:
+def supports_proba(estimator: Any) -> bool:
     """Whether an estimator exposes calibrated-ish class probabilities."""
     return hasattr(estimator, "predict_proba")

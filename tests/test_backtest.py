@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from quant_platform.backtest.engine import (
+    _enforce_portfolio_limits,
     _row_weights,
     monthly_return_table,
     run_backtest,
@@ -37,6 +39,18 @@ def test_row_weights_long_only_fully_invested():
     assert w["A"] == 0 and w["B"] == 0
 
 
+def test_long_short_remains_flat_when_universe_cannot_support_both_sides():
+    weights = _row_weights(pd.Series({"A": 1.0}), BacktestConfig(strategy="long_short"))
+    assert weights.eq(0.0).all()
+
+
+def test_rank_sizing_is_dollar_neutral_and_respects_gross_limit():
+    config = BacktestConfig(strategy="long_short", position_sizing="rank", max_leverage=0.8)
+    weights = _row_weights(pd.Series({"A": 1.0, "B": 2.0, "C": 3.0}), config)
+    assert np.isclose(weights.sum(), 0.0)
+    assert np.isclose(weights.abs().sum(), 0.8)
+
+
 def test_position_cap_enforced():
     scores = pd.Series({"A": 1.0, "B": 2.0})
     cfg = BacktestConfig(
@@ -47,6 +61,74 @@ def test_position_cap_enforced():
 
     capped = _apply_position_cap(w.to_frame().T, 0.6)
     assert (capped.abs() <= 0.6 + 1e-9).all().all()
+
+
+def test_limits_are_reapplied_after_overlay():
+    weights = pd.DataFrame({"A": [1.5], "B": [-1.5]})
+    cfg = BacktestConfig(max_position_weight=0.40, max_leverage=0.60)
+    limited = _enforce_portfolio_limits(weights, cfg)
+    assert limited.abs().max().max() <= 0.40
+    assert limited.abs().sum(axis=1).iloc[0] <= 0.60
+
+
+def test_position_caps_preserve_long_short_neutrality_by_scaling_down():
+    weights = pd.DataFrame({"A": [0.25], "B": [0.25], "C": [-0.50]})
+    limited = _enforce_portfolio_limits(
+        weights,
+        BacktestConfig(strategy="long_short", max_position_weight=0.25),
+    )
+    assert np.isclose(limited.sum(axis=1).iloc[0], 0.0)
+    assert limited.abs().max().max() <= 0.25
+
+
+def test_close_signal_observes_two_row_execution_lag():
+    dates = pd.bdate_range("2024-01-01", periods=6)
+    panel = pd.DataFrame(
+        {
+            "date": dates,
+            "ticker": "A",
+            "return": [0.00, 0.01, 0.03, -0.02, 0.04, 0.01],
+        }
+    )
+    signals = pd.DataFrame({"date": dates[:4], "ticker": "A", "score": 1.0})
+    cfg = BacktestConfig(
+        strategy="long_only",
+        max_leverage=1.0,
+        max_position_weight=1.0,
+        cost_bps=0.0,
+        slippage_bps=0.0,
+        execution_lag=2,
+    )
+    result = run_backtest(signals, panel, cfg, benchmark="A")
+    assert result.returns.index[0] == dates[2]
+    assert np.isclose(result.gross_returns.iloc[0], 0.03)
+    assert np.isclose(result.weights.iloc[0, 0], 1.0)
+
+
+def test_missing_signal_date_holds_position_and_market_calendar():
+    dates = pd.bdate_range("2024-01-01", periods=7)
+    panel = pd.DataFrame(
+        {"date": dates, "ticker": "A", "return": np.arange(7, dtype=float) / 100.0}
+    )
+    signals = pd.DataFrame({"date": [dates[0], dates[2], dates[3]], "ticker": "A", "score": 1.0})
+    cfg = BacktestConfig(
+        strategy="long_only",
+        max_position_weight=1.0,
+        cost_bps=0.0,
+        slippage_bps=0.0,
+    )
+    result = run_backtest(signals, panel, cfg, benchmark="A")
+    assert dates[3] in result.returns.index
+    assert np.isclose(result.weights.loc[dates[3], "A"], 1.0)
+
+
+def test_missing_return_for_active_position_fails_closed():
+    dates = pd.bdate_range("2024-01-01", periods=5)
+    panel = pd.DataFrame({"date": dates, "ticker": "A", "return": [0.0, 0.01, np.nan, 0.01, 0.01]})
+    signals = pd.DataFrame({"date": dates[:3], "ticker": "A", "score": 1.0})
+    cfg = BacktestConfig(strategy="long_only", max_position_weight=1.0)
+    with pytest.raises(ValueError, match="missing asset returns"):
+        run_backtest(signals, panel, cfg, benchmark="A")
 
 
 def test_monthly_return_table_shape():

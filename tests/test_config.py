@@ -38,6 +38,31 @@ def test_invalid_var_confidence_rejected():
         AppConfig.model_validate({"risk": {"var_confidence": 1.5}})
 
 
+def test_embargo_must_cover_forward_horizon():
+    with pytest.raises(ValidationError, match="embargo"):
+        AppConfig.model_validate({"model": {"forward_horizon": 5, "cv": {"embargo": 4}}})
+
+
+def test_task_and_target_must_be_consistent():
+    with pytest.raises(ValidationError, match="forward_return"):
+        AppConfig.model_validate({"model": {"task": "regression", "target": "direction"}})
+
+
+def test_close_signal_execution_lag_is_conservative():
+    with pytest.raises(ValidationError, match="greater than or equal to 2"):
+        AppConfig.model_validate({"backtest": {"execution_lag": 1}})
+
+
+def test_readiness_aum_must_be_positive():
+    with pytest.raises(ValidationError, match="greater than 0"):
+        AppConfig.model_validate({"evaluation": {"readiness_aum_usd": 0}})
+
+
+def test_capacity_aum_grid_must_be_positive():
+    with pytest.raises(ValidationError, match="aum_grid_usd"):
+        AppConfig.model_validate({"evaluation": {"aum_grid_usd": [0, 1_000_000]}})
+
+
 def test_unknown_key_rejected():
     with pytest.raises(ValidationError):
         AppConfig.model_validate({"data": {"not_a_real_key": 1}})
@@ -64,3 +89,42 @@ def test_env_override_seed(tmp_path, monkeypatch):
 def test_missing_file_raises():
     with pytest.raises(FileNotFoundError):
         AppConfig.from_yaml("does/not/exist.yaml")
+
+
+def test_nasdaq_data_link_config_is_strict_and_has_no_secret_field():
+    cfg = AppConfig.model_validate(
+        {
+            "data": {
+                "source": "nasdaq_data_link",
+                "nasdaq_data_link": {
+                    "table": "sharadar/sep",
+                    "requests_per_minute": 12,
+                    "max_requests": 20,
+                },
+            }
+        }
+    )
+    assert cfg.data.nasdaq_data_link.table == "SHARADAR/SEP"
+    assert "api_key" not in cfg.data.nasdaq_data_link.model_dump()
+
+
+@pytest.mark.parametrize(
+    "nasdaq_config",
+    [
+        {"table": "not-a-table"},
+        {"cache_dir": "../escape"},
+        {"requests_per_minute": 0},
+        {"max_requests": 0},
+        {"page_size": 10_001},
+        {"cache_mode": "fallback_to_network"},
+        {"api_key": "must-not-be-configurable"},
+    ],
+)
+def test_invalid_nasdaq_data_link_config_is_rejected(nasdaq_config):
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"data": {"nasdaq_data_link": nasdaq_config}})
+
+
+def test_invalid_data_date_range_is_rejected():
+    with pytest.raises(ValidationError, match="on or after"):
+        AppConfig.model_validate({"data": {"start": "2025-01-01", "end": "2024-01-01"}})

@@ -22,8 +22,10 @@ def configure_logging(level: str | None = None, *, force: bool = False) -> None:
     Parameters
     ----------
     level:
-        Logging level name (e.g. ``"INFO"``). If ``None`` the ``QRDP_LOG_LEVEL``
-        environment variable is consulted, defaulting to ``"INFO"``.
+        Logging level name (e.g. ``"INFO"``). If ``None`` the
+        ``SIGNALATTICE_LOG_LEVEL`` environment variable is consulted,
+        defaulting to ``"INFO"``. The legacy ``QRDP_LOG_LEVEL`` alias remains
+        supported.
     force:
         Re-configure even if logging was already set up. Useful in tests.
     """
@@ -31,7 +33,9 @@ def configure_logging(level: str | None = None, *, force: bool = False) -> None:
     if _CONFIGURED and not force:
         return
 
-    level_name = (level or os.getenv("QRDP_LOG_LEVEL") or "INFO").upper()
+    level_name = (
+        level or os.getenv("SIGNALATTICE_LOG_LEVEL") or os.getenv("QRDP_LOG_LEVEL") or "INFO"
+    ).upper()
     log_level = getattr(logging, level_name, logging.INFO)
 
     handler: logging.Handler

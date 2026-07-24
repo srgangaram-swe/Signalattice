@@ -22,22 +22,25 @@ install: ## Install the package (editable) with dev extras
 	$(BIN)/python -m pip install -e ".[dev]"
 
 .PHONY: install-all
-install-all: ## Install with all optional extras (data, boost, mlflow)
-	$(BIN)/python -m pip install -e ".[dev,data,boost,mlflow]"
+install-all: ## Install every optional integration, including PyTorch
+	$(BIN)/python -m pip install -e ".[dev,data,boost,torch,mlflow]"
 
 .PHONY: lint
 lint: ## Run ruff + black --check
-	$(BIN)/ruff check src tests
-	$(BIN)/black --check src tests
+	$(BIN)/ruff check src tests scripts
+	$(BIN)/black --check src tests scripts
 
 .PHONY: format
 format: ## Auto-format with ruff --fix and black
-	$(BIN)/ruff check --fix src tests
-	$(BIN)/black src tests
+	$(BIN)/ruff check --fix src tests scripts
+	$(BIN)/black src tests scripts
 
 .PHONY: typecheck
 typecheck: ## Run mypy static type checks
 	$(BIN)/mypy src
+
+.PHONY: quality
+quality: lint typecheck ## Run all static quality gates
 
 .PHONY: test
 test: ## Run the test suite (skips network tests)
@@ -45,35 +48,43 @@ test: ## Run the test suite (skips network tests)
 
 .PHONY: test-cov
 test-cov: ## Run tests with coverage report
-	$(BIN)/pytest -m "not network" --cov=quant_platform --cov-report=term-missing
+	$(BIN)/pytest -m "not network" --cov=quant_platform --cov-branch \
+		--cov-report=term-missing --cov-report=xml --cov-fail-under=80
+
+.PHONY: build
+build: ## Build the source distribution and wheel
+	$(BIN)/python -m build
+
+.PHONY: ci
+ci: quality test-cov build ## Reproduce the local CI quality, test, and package gates
 
 .PHONY: ingest
 ingest: ## Ingest market data using $(CONFIG)
-	$(BIN)/quant-platform ingest-data --config $(CONFIG)
+	$(BIN)/signalattice ingest-data --config $(CONFIG)
 
 .PHONY: features
 features: ## Build features using $(CONFIG)
-	$(BIN)/quant-platform build-features --config $(CONFIG)
+	$(BIN)/signalattice build-features --config $(CONFIG)
 
 .PHONY: train
 train: ## Train models using $(CONFIG)
-	$(BIN)/quant-platform train-model --config $(CONFIG)
+	$(BIN)/signalattice train-model --config $(CONFIG)
 
 .PHONY: backtest
 backtest: ## Run backtest using $(CONFIG)
-	$(BIN)/quant-platform run-backtest --config $(CONFIG)
+	$(BIN)/signalattice run-backtest --config $(CONFIG)
 
 .PHONY: report
 report: ## Generate report using $(CONFIG)
-	$(BIN)/quant-platform generate-report --config $(CONFIG)
+	$(BIN)/signalattice generate-report --config $(CONFIG)
 
 .PHONY: pipeline
 pipeline: ## Run the full end-to-end pipeline using $(CONFIG)
-	$(BIN)/quant-platform run-full-pipeline --config $(CONFIG)
+	$(BIN)/signalattice run-full-pipeline --config $(CONFIG)
 
 .PHONY: demo
 demo: ## Run a fully offline demo (synthetic data) end-to-end
-	$(BIN)/quant-platform run-full-pipeline --config configs/synthetic.yaml
+	$(BIN)/signalattice run-full-pipeline --config configs/synthetic.yaml
 
 .PHONY: clean
 clean: ## Remove caches and build artifacts
@@ -87,7 +98,7 @@ clean-data: ## Remove generated data, reports, experiments (keeps .gitkeep)
 
 .PHONY: docker-build
 docker-build: ## Build the Docker image
-	docker build -t signalattice:latest .
+	docker build --pull -t signalattice:latest .
 
 .PHONY: docker-demo
 docker-demo: ## Run the synthetic demo inside Docker

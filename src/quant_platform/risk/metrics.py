@@ -27,23 +27,25 @@ def annualized_return(returns: pd.Series, periods_per_year: int = TRADING_DAYS) 
     r = _clean(returns)
     if r.empty:
         return float("nan")
-    growth = float((1.0 + r).prod())
+    values = r.to_numpy(dtype=float)
+    growth = float(np.prod(1.0 + values))
     years = len(r) / periods_per_year
     if years <= 0 or growth <= 0:
         return float("nan")
-    return growth ** (1.0 / years) - 1.0
+    return float(growth ** (1.0 / years) - 1.0)
 
 
 def cagr(equity_curve: pd.Series, periods_per_year: int = TRADING_DAYS) -> float:
     """Compound annual growth rate from an equity curve (level series)."""
     eq = _clean(equity_curve)
-    if len(eq) < 2 or eq.iloc[0] <= 0:
+    values = eq.to_numpy(dtype=float)
+    if len(values) < 2 or values[0] <= 0:
         return float("nan")
-    total_growth = eq.iloc[-1] / eq.iloc[0]
+    total_growth = float(values[-1] / values[0])
     years = len(eq) / periods_per_year
     if years <= 0 or total_growth <= 0:
         return float("nan")
-    return total_growth ** (1.0 / years) - 1.0
+    return float(total_growth ** (1.0 / years) - 1.0)
 
 
 def annualized_volatility(returns: pd.Series, periods_per_year: int = TRADING_DAYS) -> float:
@@ -89,9 +91,14 @@ def sortino_ratio(
 def drawdown_series(returns: pd.Series) -> pd.Series:
     """Drawdown path (<= 0) from the cumulative-return equity curve."""
     r = _clean(returns)
-    equity = (1.0 + r).cumprod()
-    peak = equity.cummax()
-    return equity / peak - 1.0
+    if r.empty:
+        return r
+    # Include initial capital (1.0) when establishing the running peak. Without
+    # it an immediate loss is incorrectly reported as a zero drawdown because
+    # the first depressed equity value becomes its own high-water mark.
+    equity = (1.0 + r).cumprod().to_numpy(dtype=float)
+    peaks = np.maximum.accumulate(np.concatenate(([1.0], equity)))[1:]
+    return pd.Series(equity / peaks - 1.0, index=r.index, name="drawdown")
 
 
 def max_drawdown(returns: pd.Series) -> float:
@@ -185,8 +192,16 @@ def performance_summary(
         "var_95": value_at_risk(r, confidence, method="historical"),
         "cvar_95": conditional_value_at_risk(r, confidence),
         "hit_rate": hit_rate(r),
-        "skew": float(r.skew()) if len(r) > 2 else float("nan"),
-        "kurtosis": float(r.kurtosis()) if len(r) > 3 else float("nan"),
+        "skew": (
+            float(np.asarray(pd.Series(r.to_numpy(dtype=float)).skew()).item())
+            if len(r) > 2
+            else float("nan")
+        ),
+        "kurtosis": (
+            float(np.asarray(pd.Series(r.to_numpy(dtype=float)).kurtosis()).item())
+            if len(r) > 3
+            else float("nan")
+        ),
         "n_periods": float(len(r)),
     }
     if benchmark_returns is not None:

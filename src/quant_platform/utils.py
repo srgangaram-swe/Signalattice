@@ -7,10 +7,12 @@ import os
 import random
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+import pandas as pd
 
-PathLike = "str | os.PathLike"
+type PathLike = str | os.PathLike[str]
 
 
 def set_global_seed(seed: int = 42) -> None:
@@ -67,25 +69,25 @@ def ensure_dir(path: PathLike) -> Path:
     return p
 
 
-def hash_dataframe(df, *, length: int = 12) -> str:
+def hash_dataframe(df: pd.DataFrame, *, length: int = 12) -> str:
     """Deterministic short hash of a DataFrame's contents and schema.
 
     Used to produce a dataset version/fingerprint for experiment tracking so a
     run can be tied back to the exact data it consumed.
     """
-    import pandas as pd
-
     hasher = hashlib.sha256()
     # Schema + shape.
     hasher.update(str(list(df.columns)).encode())
     hasher.update(str(df.shape).encode())
     # Index (e.g. dates) and values, via pandas' stable hashing.
-    hasher.update(pd.util.hash_pandas_object(df.index, index=True).values.tobytes())
-    hasher.update(pd.util.hash_pandas_object(df, index=True).values.tobytes())
+    index_hash = pd.util.hash_pandas_object(df.index, index=True).to_numpy(dtype=np.uint64)
+    value_hash = pd.util.hash_pandas_object(df, index=True).to_numpy(dtype=np.uint64)
+    hasher.update(index_hash.tobytes())
+    hasher.update(value_hash.tobytes())
     return hasher.hexdigest()[:length]
 
 
-def hash_dict(mapping: dict, *, length: int = 12) -> str:
+def hash_dict(mapping: dict[str, Any], *, length: int = 12) -> str:
     """Deterministic short hash of a JSON-serialisable mapping."""
     import json
 
