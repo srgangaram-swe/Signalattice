@@ -30,6 +30,8 @@ ai.md
 data/raw/**
 data/processed/**
 data/external/**
+data/vendor/**
+data/signal-foundry-bundles/**
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/external/.gitkeep

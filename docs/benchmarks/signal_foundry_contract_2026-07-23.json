@@ -1,0 +1,30 @@
+{
+  "as_of_read_seconds": 0.7674813749617897,
+  "benchmark": "signal_foundry_contract",
+  "bundle_bytes": 548579,
+  "command": ".venv/bin/python scripts/benchmark_signal_foundry_contract.py",
+  "export_seconds": 0.8208035409916192,
+  "filtered_rows": 33408,
+  "hardware": {
+    "architecture": "arm64",
+    "cpu": "Apple M4",
+    "memory_bytes": 17179869184,
+    "operating_system": "macOS 15.5 (24F74)"
+  },
+  "limitations": [
+    "single local process",
+    "synthetic deterministic data",
+    "warm filesystem state is not controlled",
+    "not a provider-network benchmark",
+    "one observed run; use repeated samples before setting a regression threshold"
+  ],
+  "pandas": "3.0.3",
+  "peak_tracemalloc_bytes": 21052235,
+  "platform": "macOS-15.5-arm64-arm-64bit-Mach-O",
+  "pyarrow": "24.0.0",
+  "python": "3.13.11",
+  "rows": 48000,
+  "rows_per_export_second": 58479.27987982462,
+  "tickers": 32,
+  "validate_seconds": 0.4120761670055799
+}

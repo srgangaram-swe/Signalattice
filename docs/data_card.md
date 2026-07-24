@@ -93,6 +93,12 @@ implemented.
 These gaps constrain both model validity and the capacity claims described in the
 [backtesting contract](backtesting.md).
 
+The optional Nasdaq Data Link adapter improves source provenance, immutable caching, and
+temporal contract enforcement, but the availability timestamp is a conservative policy
+assumption unless the selected table supplies an authoritative publication timestamp.
+The adapter does not by itself remove survivorship, historical-revision, constituent, or
+corporate-action limitations. Its redacted source manifest records these gaps.
+
 ## Appropriate use
 
 Use synthetic data for deterministic engineering validation and public data for explicitly

@@ -7,7 +7,9 @@ committed.
 data/
 ├── raw/         # per-ticker source snapshots as Parquet
 ├── processed/   # validated price panels and feature matrices
-└── external/    # optional external datasets
+├── external/    # optional external datasets
+├── vendor/      # immutable licensed-provider response cache
+└── signal-foundry-bundles/ # versioned local exchange bundles for AlphaForge
 ```
 
 The ingestion stage writes:
@@ -31,3 +33,9 @@ default. See the [data card](../docs/data_card.md) for lineage and point-in-time
 
 All generated data files are ignored by git so the repository remains lightweight and free
 of vendor data redistribution issues.
+
+Nasdaq Data Link responses are staged and promoted into immutable content-addressed
+snapshots under `data/vendor/`. Signal Foundry exports are partitioned by year and contain
+a canonical manifest with source, contract, file, temporal, and license provenance. See
+the [provider boundary](../docs/nasdaq_data_link.md) and
+[contract specification](../docs/signal_foundry_contract.md).

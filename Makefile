@@ -27,13 +27,13 @@ install-all: ## Install every optional integration, including PyTorch
 
 .PHONY: lint
 lint: ## Run ruff + black --check
-	$(BIN)/ruff check src tests
-	$(BIN)/black --check src tests
+	$(BIN)/ruff check src tests scripts
+	$(BIN)/black --check src tests scripts
 
 .PHONY: format
 format: ## Auto-format with ruff --fix and black
-	$(BIN)/ruff check --fix src tests
-	$(BIN)/black src tests
+	$(BIN)/ruff check --fix src tests scripts
+	$(BIN)/black src tests scripts
 
 .PHONY: typecheck
 typecheck: ## Run mypy static type checks

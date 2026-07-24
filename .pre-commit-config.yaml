@@ -32,7 +32,7 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        entry: mypy
+        entry: .venv/bin/python -m mypy
         language: system
         pass_filenames: false
         args: ["src"]

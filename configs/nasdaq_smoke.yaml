@@ -1,0 +1,32 @@
+# Opt-in live entitlement/rate-limit smoke test. This profile is intentionally
+# bounded to one symbol, five market dates, and two total HTTP requests.
+
+project:
+  name: nasdaq_data_link_smoke
+  seed: 42
+
+data:
+  source: nasdaq_data_link
+  allow_synthetic_fallback: false
+  tickers: [SPY]
+  benchmark: SPY
+  start: "2024-01-02"
+  end: "2024-01-08"
+  raw_dir: data/raw/smoke
+  processed_dir: data/processed/smoke
+  price_field: adj_close
+  min_observations: 1
+  nasdaq_data_link:
+    table: SHARADAR/SEP
+    cache_mode: network
+    cache_dir: data/vendor/nasdaq-data-link-smoke
+    requests_per_minute: 10
+    max_requests: 2
+    page_size: 100
+    timeout_seconds: 30
+    max_retries: 1
+    retry_backoff_seconds: 1
+    availability_lag_hours: 8
+
+tracking:
+  backend: none
