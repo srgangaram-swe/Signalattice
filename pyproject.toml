@@ -164,6 +164,8 @@ module = [
     "lightgbm",
     "mlflow.*",
     "pandas_datareader.*",
+    "pyarrow",
+    "pyarrow.*",
     "torch",
     "torch.*",
     "xgboost",
