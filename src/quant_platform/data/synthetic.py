@@ -3,9 +3,11 @@
 Used as a deterministic, offline fallback when network data sources are
 unavailable (e.g. in CI or air-gapped environments). The generator produces a
 realistic *factor-structured* panel: a common market factor drives each name
-through a per-ticker beta, plus idiosyncratic noise. This means cross-sectional
-features (beta, correlation, ranks) and long/short strategies behave sensibly
-on synthetic data — not just on real data.
+through a per-ticker beta, plus idiosyncratic noise. The default process embeds
+small, declared AR(1) momentum and mean-reversion effects so causal-model tests
+can recover a known edge. Setting both autocorrelation parameters to zero gives
+a null directional process. Synthetic results remain engineering evidence, not
+evidence of live-market profitability.
 
 The output conforms exactly to the canonical schema in
 :mod:`quant_platform.data.schema`.
@@ -21,6 +23,16 @@ from quant_platform.data.schema import DATE_COL, TICKER_COL
 from quant_platform.logging_utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def _ar1_shocks(noise: np.ndarray, coefficient: float) -> np.ndarray:
+    """Create a stationary, unit-variance AR(1) path from IID standard noise."""
+    values = np.empty_like(noise, dtype=float)
+    values[0] = noise[0]
+    innovation_scale = np.sqrt(1.0 - coefficient**2)
+    for idx in range(1, len(noise)):
+        values[idx] = coefficient * values[idx - 1] + innovation_scale * noise[idx]
+    return values
 
 
 def generate_synthetic_panel(
@@ -55,7 +67,7 @@ def generate_synthetic_panel(
     mkt_sigma = config.market_vol
     # Add mild volatility clustering via a slow-moving vol regime.
     regime = 1.0 + 0.5 * np.sin(np.linspace(0, 6 * np.pi, n)) ** 2
-    mkt_shocks = rng.standard_normal(n) * regime
+    mkt_shocks = _ar1_shocks(rng.standard_normal(n), config.market_autocorrelation) * regime
     mkt_ret = (mkt_mu - 0.5 * mkt_sigma**2) * dt + mkt_sigma * np.sqrt(dt) * mkt_shocks
 
     frames: list[pd.DataFrame] = []
@@ -72,7 +84,9 @@ def generate_synthetic_panel(
             beta = float(np.clip(t_rng.normal(config.market_beta_mean, 0.35), 0.1, 2.2))
             alpha = float(t_rng.normal(0.0, 0.02)) * dt
             idio_sigma = float(np.clip(t_rng.normal(config.annual_vol, 0.05), 0.08, 0.6))
-            idio = t_rng.standard_normal(n) * regime
+            idio = (
+                _ar1_shocks(t_rng.standard_normal(n), config.idiosyncratic_autocorrelation) * regime
+            )
             ret = (
                 alpha + beta * mkt_ret + idio_sigma * np.sqrt(dt) * idio - 0.5 * idio_sigma**2 * dt
             )

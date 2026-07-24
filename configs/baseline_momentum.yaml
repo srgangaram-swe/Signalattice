@@ -15,6 +15,7 @@ project:
 
 data:
   source: auto
+  allow_synthetic_fallback: false
   tickers: [SPY, QQQ, AAPL, MSFT, NVDA, JPM, TLT, XOM, GLD, IWM]
   benchmark: SPY
   start: "2015-01-01"
@@ -39,6 +40,7 @@ backtest:
   initial_capital: 1000000
   max_leverage: 1.0
   position_sizing: equal_weight
+  execution_lag: 2
 
 risk:
   var_confidence: 0.95
@@ -51,4 +53,4 @@ tracking:
 report:
   output_dir: reports
   figures_dir: reports/figures
-  title: "Quant Research Platform — Momentum Baseline"
+  title: "Signalattice — Momentum Baseline"

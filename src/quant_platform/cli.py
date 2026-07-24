@@ -16,6 +16,9 @@ or via ``python -m quant_platform.cli ...``.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import typer
 
 from quant_platform import __version__
@@ -70,6 +73,57 @@ def ingest_data(
     typer.echo(
         f"Ingested {len(panel):,} rows for {panel['ticker'].nunique()} tickers "
         f"→ {pipe.processed_dir}"
+    )
+
+
+@app.command("export-signal-foundry-bundle")
+def export_signal_foundry_bundle_cmd(
+    config: str = ConfigOpt,
+    output: str = typer.Option(
+        "data/signal-foundry-bundles",
+        "--output",
+        "-o",
+        help="Ignored local parent directory for immutable contract bundles.",
+    ),
+    log_level: str | None = LogLevelOpt,
+) -> None:
+    """Export the verified processed panel for the AlphaForge boundary."""
+    from quant_platform.data.signal_foundry_contract import export_signal_foundry_bundle
+
+    pipe = _load(config, log_level)
+    panel = pipe.ingest()
+    metadata_path = pipe.processed_dir / "panel_metadata.json"
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise typer.BadParameter(
+            f"processed metadata is missing or invalid: {metadata_path}"
+        ) from exc
+    source_manifest = metadata.get("source_manifest")
+    if metadata.get("source") != "nasdaq_data_link" or not isinstance(source_manifest, dict):
+        raise typer.BadParameter(
+            "Signal Foundry export requires data.source='nasdaq_data_link' and a verified "
+            "redacted source manifest"
+        )
+    bundle = export_signal_foundry_bundle(
+        panel,
+        Path(output),
+        source_manifest=source_manifest,
+    )
+    typer.echo(f"Signal Foundry bundle: {bundle}")
+
+
+@app.command("validate-signal-foundry-bundle")
+def validate_signal_foundry_bundle_cmd(
+    bundle: str = typer.Argument(..., help="Path to an immutable Signal Foundry bundle.")
+) -> None:
+    """Verify a bundle before a consumer is allowed to read it."""
+    from quant_platform.data.signal_foundry_contract import validate_signal_foundry_bundle
+
+    manifest = validate_signal_foundry_bundle(Path(bundle))
+    typer.echo(
+        f"Verified {manifest['bundle_id']} "
+        f"({manifest['rows']:,} rows, {len(manifest['tickers'])} tickers)"
     )
 
 
@@ -135,6 +189,22 @@ def run_full_pipeline(
     )
     typer.echo(f"Strategy CAGR   : {bt.stats['cagr'] * 100:.2f}%")
     typer.echo(f"Max drawdown    : {bt.stats['max_drawdown'] * 100:.2f}%")
+    if art.train_result is not None:
+        metrics = art.train_result.metrics
+        typer.echo(f"Forecast ROC AUC: {metrics.get('roc_auc', float('nan')):.3f}")
+        typer.echo(
+            "Forecast ECE    : " f"{metrics.get('expected_calibration_error', float('nan')):.3f}"
+        )
+    decision = art.decision_analysis
+    typer.echo(
+        "Break-even cost   : "
+        f"{decision.get('break_even_one_way_cost_bps', float('nan')):.2f} bps one way"
+    )
+    gate = decision.get("readiness_gate", {})
+    typer.echo(
+        f"Readiness verdict: {gate.get('verdict', 'NOT_EVALUATED')} "
+        f"({gate.get('passed_count', 0)}/{gate.get('criterion_count', 0)} gates)"
+    )
     typer.echo(f"Report          : {art.report_path}")
     typer.echo(f"Figures         : {pipe.figures_dir} ({len(art.figures)} plots)")
 

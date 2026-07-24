@@ -24,7 +24,8 @@ def simple_returns(price: pd.Series, periods: int = 1) -> pd.Series:
 
 def log_returns(price: pd.Series, periods: int = 1) -> pd.Series:
     """Continuously-compounded (log) return over ``periods`` bars."""
-    return np.log(price / price.shift(periods))
+    result = np.log((price / price.shift(periods)).to_numpy(dtype=float))
+    return pd.Series(result, index=price.index, name=price.name)
 
 
 def rolling_volatility(
@@ -40,7 +41,8 @@ def rolling_volatility(
 def realized_volatility(returns: pd.Series, window: int = 21) -> pd.Series:
     """Annualised realized volatility = sqrt(sum of squared returns) scaled."""
     rv = returns.pow(2).rolling(window, min_periods=max(2, window // 2)).sum()
-    return np.sqrt(rv * (TRADING_DAYS / window))
+    values = np.sqrt(rv.to_numpy(dtype=float) * (TRADING_DAYS / window))
+    return pd.Series(values, index=returns.index, name=rv.name)
 
 
 def rolling_sharpe(returns: pd.Series, window: int = 63, *, annualize: bool = True) -> pd.Series:

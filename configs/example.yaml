@@ -1,20 +1,21 @@
 # =============================================================================
 # Example end-to-end configuration.
 #
-# This is the "real data" config used in the README quickstart. It pulls daily
-# data from Yahoo Finance (falling back to Stooq, then synthetic) for a small,
-# liquid cross-section spanning equities, mega-cap tech, a bank and a bond ETF.
+# This is the historical-data research config used in the README. It tries
+# Yahoo Finance and then Stooq, but fails closed rather than relabelling a
+# synthetic run as market evidence.
 #
 # Run:  quant-platform run-full-pipeline --config configs/example.yaml
 # =============================================================================
 
 project:
-  name: example
+  name: historical_calibrated_ensemble
   seed: 42
   description: "Cross-sectional ML long/short on a liquid multi-asset universe."
 
 data:
-  source: auto            # auto -> yfinance -> stooq -> synthetic fallback
+  source: auto            # auto -> yfinance -> stooq; no hidden synthetic fallback
+  allow_synthetic_fallback: false
   tickers: [SPY, QQQ, AAPL, MSFT, NVDA, JPM, TLT]
   benchmark: SPY
   start: "2015-01-01"
@@ -43,12 +44,16 @@ model:
   task: classification     # predict next-day up/down
   target: direction
   forward_horizon: 1
-  type: random_forest      # logistic | random_forest | gradient_boosting | xgboost | lightgbm
+  type: ensemble
   standardize: true
-  params:
-    n_estimators: 300
-    max_depth: 5
-    min_samples_leaf: 100
+  ensemble:
+    candidates: [logistic, random_forest, gradient_boosting]
+    calibration_fraction: 0.20
+    calibration_method: sigmoid
+    min_calibration_dates: 40
+    candidate_params:
+      random_forest: {n_estimators: 300, max_depth: 6, min_samples_leaf: 50}
+      gradient_boosting: {n_estimators: 200, max_depth: 3, learning_rate: 0.05}
   cv:
     scheme: walk_forward   # walk_forward | expanding
     n_splits: 5
@@ -65,8 +70,24 @@ backtest:
   initial_capital: 1000000
   max_leverage: 1.0
   position_sizing: equal_weight   # equal_weight | rank | vol_target
+  signal_selection: quantile
   vol_target_annual: 0.10
   max_position_weight: 0.34
+  rebalance_threshold: 0.02
+  execution_lag: 2
+
+evaluation:
+  cost_grid_bps: [0.0, 1.5, 3.0, 5.0, 10.0, 25.0]
+  delay_bars: [0, 1, 2, 3, 5]
+  aum_grid_usd: [1000000, 5000000, 10000000, 25000000]
+  readiness_aum_usd: 1000000
+  max_participation_rate: 0.01
+  latency_budget_ms: 1000.0
+  min_roc_auc: 0.52
+  max_ece: 0.05
+  min_positive_fold_fraction: 0.60
+  min_net_sharpe: 0.50
+  min_cost_multiple: 2.0
 
 risk:
   var_confidence: 0.95
@@ -78,7 +99,7 @@ risk:
 
 tracking:
   backend: sqlite          # sqlite | json | mlflow | none
-  experiment_name: example
+  experiment_name: historical_calibrated_ensemble
   db_path: experiments/experiments.sqlite
   json_dir: experiments/runs
 
@@ -86,4 +107,4 @@ report:
   output_dir: reports/example
   figures_dir: reports/example/figures
   format: markdown         # markdown | html
-  title: "Quant Research Platform — Example Run"
+  title: "Signalattice — Historical Forecast Decision-Readiness"

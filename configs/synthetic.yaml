@@ -9,7 +9,7 @@
 # =============================================================================
 
 project:
-  name: synthetic_demo
+  name: synthetic_calibrated_ensemble
   seed: 42
   description: "Offline reproducible demo on factor-structured synthetic data."
 
@@ -28,6 +28,10 @@ data:
     annual_vol: 0.22
     market_beta_mean: 1.0
     market_vol: 0.16
+    # Declared, recoverable dynamics for engineering validation. Set both to
+    # zero for a null-edge test; neither implies live-market predictability.
+    market_autocorrelation: 0.30
+    idiosyncratic_autocorrelation: 0.20
 
 features:
   vol_windows: [5, 21, 63]
@@ -48,12 +52,16 @@ model:
   task: classification
   target: direction
   forward_horizon: 1
-  type: gradient_boosting
+  type: ensemble
   standardize: true
-  params:
-    n_estimators: 150
-    max_depth: 3
-    learning_rate: 0.05
+  ensemble:
+    candidates: [logistic, random_forest, gradient_boosting]
+    calibration_fraction: 0.20
+    calibration_method: sigmoid
+    min_calibration_dates: 40
+    candidate_params:
+      random_forest: {n_estimators: 250, max_depth: 6, min_samples_leaf: 50}
+      gradient_boosting: {n_estimators: 160, max_depth: 3, learning_rate: 0.05}
   cv:
     scheme: walk_forward
     n_splits: 4
@@ -70,8 +78,24 @@ backtest:
   initial_capital: 1000000
   max_leverage: 1.0
   position_sizing: equal_weight
+  signal_selection: quantile
   vol_target_annual: 0.10
   max_position_weight: 0.34
+  rebalance_threshold: 0.02
+  execution_lag: 2
+
+evaluation:
+  cost_grid_bps: [0.0, 1.5, 3.0, 5.0, 10.0, 25.0]
+  delay_bars: [0, 1, 2, 3, 5]
+  aum_grid_usd: [1000000, 5000000, 10000000, 25000000]
+  readiness_aum_usd: 1000000
+  max_participation_rate: 0.01
+  latency_budget_ms: 1000.0
+  min_roc_auc: 0.52
+  max_ece: 0.05
+  min_positive_fold_fraction: 0.60
+  min_net_sharpe: 0.50
+  min_cost_multiple: 2.0
 
 risk:
   var_confidence: 0.95
@@ -83,12 +107,12 @@ risk:
 
 tracking:
   backend: sqlite
-  experiment_name: synthetic_demo
+  experiment_name: synthetic_calibrated_ensemble
   db_path: experiments/experiments.sqlite
   json_dir: experiments/runs
 
 report:
-  output_dir: reports
-  figures_dir: reports/figures
+  output_dir: reports/example
+  figures_dir: reports/example/figures
   format: markdown
-  title: "Quant Research Platform — Synthetic Demo"
+  title: "Signalattice — Synthetic Forecast Decision-Readiness"

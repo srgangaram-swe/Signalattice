@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import importlib
+import json
+from datetime import UTC, datetime
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from quant_platform.config import DataConfig
-from quant_platform.data.ingest import ingest, load_processed
+from quant_platform.data.ingest import _fetch_raw, ingest, load_processed
+from quant_platform.data.nasdaq_data_link import FetchResult
 from quant_platform.data.schema import OHLCV_COLUMNS, PANEL_COLUMNS, coerce_panel_dtypes
+from quant_platform.data.sources import DataSourceError
 from quant_platform.data.validation import DataValidationError, validate_price_panel
 
 
@@ -90,7 +96,169 @@ def test_ingest_synthetic_roundtrip(tmp_path):
     assert (tmp_path / "processed" / "panel_metadata.json").exists()
 
 
+def test_ingest_cache_invalidates_when_seed_changes(tmp_path):
+    cfg = DataConfig(
+        source="synthetic",
+        tickers=["SPY", "AAA"],
+        benchmark="SPY",
+        raw_dir=str(tmp_path / "raw"),
+        processed_dir=str(tmp_path / "processed"),
+        min_observations=50,
+        synthetic={"n_days": 120},
+    )
+    first = ingest(cfg, base_dir=str(tmp_path), seed=1)
+    second = ingest(cfg, base_dir=str(tmp_path), seed=2)
+
+    assert not first["close"].equals(second["close"])
+
+
+def test_ingest_cache_invalidates_when_data_config_changes(tmp_path):
+    cfg = DataConfig(
+        source="synthetic",
+        tickers=["SPY", "AAA"],
+        benchmark="SPY",
+        raw_dir=str(tmp_path / "raw"),
+        processed_dir=str(tmp_path / "processed"),
+        min_observations=50,
+        synthetic={"n_days": 120, "annual_drift": 0.01},
+    )
+    first = ingest(cfg, base_dir=str(tmp_path), seed=7)
+    cfg.synthetic.annual_drift = 0.30
+    second = ingest(cfg, base_dir=str(tmp_path), seed=7)
+
+    assert not first["close"].equals(second["close"])
+
+
+def test_auto_source_fails_closed_without_explicit_synthetic_fallback(monkeypatch):
+    def unavailable(*_args, **_kwargs):
+        raise DataSourceError("offline")
+
+    ingest_module = importlib.import_module("quant_platform.data.ingest")
+    monkeypatch.setattr(ingest_module, "fetch_yfinance", unavailable)
+    monkeypatch.setattr(ingest_module, "fetch_stooq", unavailable)
+    cfg = DataConfig(
+        source="auto",
+        allow_synthetic_fallback=False,
+        tickers=["SPY", "AAA"],
+        benchmark="SPY",
+        min_observations=10,
+        synthetic={"n_days": 20},
+    )
+
+    with pytest.raises(DataSourceError, match="allow_synthetic_fallback"):
+        _fetch_raw(cfg, seed=3)
+
+
+def test_auto_source_uses_synthetic_only_when_explicitly_enabled(monkeypatch):
+    def unavailable(*_args, **_kwargs):
+        raise DataSourceError("offline")
+
+    ingest_module = importlib.import_module("quant_platform.data.ingest")
+    monkeypatch.setattr(ingest_module, "fetch_yfinance", unavailable)
+    monkeypatch.setattr(ingest_module, "fetch_stooq", unavailable)
+    cfg = DataConfig(
+        source="auto",
+        allow_synthetic_fallback=True,
+        tickers=["SPY", "AAA"],
+        benchmark="SPY",
+        min_observations=10,
+        synthetic={"n_days": 20},
+    )
+
+    panel, source, source_manifest = _fetch_raw(cfg, seed=3)
+
+    assert source == "synthetic"
+    assert source_manifest is None
+    assert set(panel["ticker"]) == {"SPY", "AAA"}
+
+
+def test_synthetic_edge_is_declared_and_can_be_disabled():
+    from quant_platform.config import SyntheticConfig
+    from quant_platform.data.synthetic import generate_synthetic_panel
+
+    null = generate_synthetic_panel(
+        ["SPY"],
+        benchmark="SPY",
+        config=SyntheticConfig(
+            n_days=800,
+            market_autocorrelation=0.0,
+            idiosyncratic_autocorrelation=0.0,
+        ),
+        seed=19,
+    )
+    edge = generate_synthetic_panel(
+        ["SPY"],
+        benchmark="SPY",
+        config=SyntheticConfig(
+            n_days=800,
+            market_autocorrelation=0.45,
+            idiosyncratic_autocorrelation=0.0,
+        ),
+        seed=19,
+    )
+
+    null_return = null["adj_close"].pct_change().dropna()
+    edge_return = edge["adj_close"].pct_change().dropna()
+    assert abs(null_return.autocorr()) < 0.10
+    assert edge_return.autocorr() > 0.30
+
+
 def test_returns_have_no_inf(synthetic_panel):
     grp = synthetic_panel.groupby("ticker")["adj_close"]
     rets = synthetic_panel["adj_close"] / grp.shift(1) - 1.0
     assert not np.isinf(rets.dropna()).any()
+
+
+def test_nasdaq_source_integrates_redacted_manifest_into_panel_metadata(tmp_path, monkeypatch):
+    from quant_platform.config import SyntheticConfig
+    from quant_platform.data.synthetic import generate_synthetic_panel
+
+    panel = generate_synthetic_panel(
+        ["SPY"],
+        benchmark="SPY",
+        config=SyntheticConfig(n_days=20, start="2024-01-01"),
+        seed=9,
+    )
+    effective = pd.to_datetime(panel["date"], utc=True) + pd.Timedelta(hours=21)
+    panel["effective_at"] = effective
+    panel["available_at"] = effective + pd.Timedelta(hours=8)
+    panel["observed_at"] = pd.Timestamp("2026-07-23T00:00:00Z")
+    panel["provider_updated_at"] = pd.Timestamp("2026-07-20T00:00:00Z")
+    panel["source"] = "nasdaq_data_link"
+    panel["source_table"] = "SHARADAR/SEP"
+    panel["instrument_id"] = panel["ticker"]
+    panel["currency"] = "USD"
+    panel["exchange_calendar"] = "XNYS"
+    panel["adjustment_state"] = "provider_adjusted_close_unadjusted_ohlc"
+    manifest = {
+        "provider": "nasdaq_data_link",
+        "request": {"table": "SHARADAR/SEP"},
+        "request_hash": "a" * 64,
+        "snapshot_hash": "b" * 64,
+        "retrieved_at": datetime(2026, 7, 23, tzinfo=UTC).isoformat(),
+        "contains_api_key": False,
+    }
+
+    def fake_fetch(*_args, **_kwargs):
+        return FetchResult(panel=panel, manifest=manifest, snapshot_dir=tmp_path / "snapshot")
+
+    ingest_module = importlib.import_module("quant_platform.data.ingest")
+    monkeypatch.setattr(ingest_module, "fetch_nasdaq_data_link", fake_fetch)
+    config = DataConfig(
+        source="nasdaq_data_link",
+        tickers=["SPY"],
+        benchmark="SPY",
+        start="2024-01-01",
+        end="2024-02-01",
+        raw_dir="raw",
+        processed_dir="processed",
+        min_observations=1,
+    )
+
+    ingested = ingest(config, base_dir=tmp_path)
+    metadata = json.loads((tmp_path / "processed/panel_metadata.json").read_text())
+
+    assert len(ingested) == len(panel)
+    assert metadata["source"] == "nasdaq_data_link"
+    assert metadata["source_manifest"]["snapshot_hash"] == "b" * 64
+    assert "representative-secret-value" not in json.dumps(metadata)

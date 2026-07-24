@@ -2,14 +2,17 @@
 
 Conventions (chosen to avoid lookahead bias)
 ---------------------------------------------
-* A signal observed at the **close of day t** sets the target weights ``W[t]``.
-* Those weights are held over **day t+1** and earn ``R[t+1]`` (next-day return).
-* Trading from ``W[t-1]`` to ``W[t]`` incurs turnover-based transaction costs +
-  slippage, charged against the day the new position becomes active.
+* A signal observed after the **close of day t** sets target weights ``W[t]``.
+* With the default two-row execution lag, the strategy waits through the next
+  close and first earns the close-to-close return ending on ``t+2``. This is a
+  conservative daily-bar convention that never assumes a fill at an observed
+  close.
+* Trading incurs turnover-based transaction costs and slippage in the first
+  return interval for which the new weights are active.
 
 Therefore the realised strategy return on day ``t+1`` is::
 
-    net[t+1] = sum_i W[t,i] * R[t+1,i]  -  turnover(W[t], W[t-1]) * fee
+    net[t+L] = sum_i W[t,i] * R[t+L,i] - turnover(W[t], W[t-1]) * fee
 
 Implemented with simple pandas ``shift`` operations so the whole backtest is
 vectorised (no per-day Python loop over the P&L).
@@ -51,6 +54,7 @@ class BacktestResult:
     benchmark_equity: pd.Series
     weights: pd.DataFrame
     turnover: pd.Series
+    costs: pd.Series
     drawdown: pd.Series
     exposures: pd.DataFrame
     stats: dict[str, float]
@@ -76,6 +80,21 @@ def _row_weights(scores: pd.Series, cfg: BacktestConfig) -> pd.Series:
     lev = cfg.max_leverage
     k = max(1, int(round(n * cfg.top_quantile)))
 
+    if cfg.signal_selection == "probability_threshold":
+        longs = s[s >= cfg.long_threshold].nlargest(k).index
+        if cfg.strategy == "long_only":
+            if len(longs):
+                weights.loc[longs] = lev / len(longs)
+            return weights
+        shorts = s[s <= cfg.short_threshold].nsmallest(k).index
+        # Remain flat when calibration confidence does not support both sides;
+        # otherwise a missing side silently turns a long/short policy directional.
+        if not len(longs) or not len(shorts):
+            return weights
+        weights.loc[longs] = (lev / 2.0) / len(longs)
+        weights.loc[shorts] = -(lev / 2.0) / len(shorts)
+        return weights
+
     if cfg.position_sizing == "rank":
         ranks = s.rank(pct=True)
         if cfg.strategy == "long_only":
@@ -83,7 +102,7 @@ def _row_weights(scores: pd.Series, cfg: BacktestConfig) -> pd.Series:
             if raw.sum() > 0:
                 weights.loc[raw.index] = lev * raw / raw.sum()
         else:  # long_short
-            raw = ranks - 0.5  # demeaned tilt
+            raw = ranks - ranks.mean()
             denom = raw.abs().sum()
             if denom > 0:
                 weights.loc[raw.index] = lev * raw / denom
@@ -97,11 +116,12 @@ def _row_weights(scores: pd.Series, cfg: BacktestConfig) -> pd.Series:
     else:  # long_short, dollar-neutral
         shorts = ordered.index[-k:]
         # Guard against overlap when the universe is tiny.
-        shorts = [t for t in shorts if t not in set(longs)]
+        short_names = [t for t in shorts if t not in set(longs)]
+        if not short_names:
+            return weights
         half = lev / 2.0
         weights.loc[longs] = half / len(longs)
-        if shorts:
-            weights.loc[shorts] = -half / len(shorts)
+        weights.loc[short_names] = -half / len(short_names)
     return weights
 
 
@@ -122,8 +142,38 @@ def _build_weights(scores_wide: pd.DataFrame, cfg: BacktestConfig) -> pd.DataFra
     """Build the full (date x ticker) target-weight matrix from scores."""
     weights = scores_wide.apply(lambda row: _row_weights(row, cfg), axis=1)
     weights = weights.reindex(columns=scores_wide.columns).fillna(0.0)
-    weights = _apply_position_cap(weights, cfg.max_position_weight)
-    return weights
+    return _enforce_portfolio_limits(weights, cfg)
+
+
+def _enforce_portfolio_limits(weights: pd.DataFrame, cfg: BacktestConfig) -> pd.DataFrame:
+    """Enforce both per-name and portfolio gross limits without scaling up."""
+    limited = _apply_position_cap(weights, cfg.max_position_weight)
+    if cfg.strategy == "long_short":
+        long_gross = limited.clip(lower=0.0).sum(axis=1)
+        short_gross = -limited.clip(upper=0.0).sum(axis=1)
+        balanced_gross = pd.concat([long_gross, short_gross], axis=1).min(axis=1)
+        long_scale = (balanced_gross / long_gross.replace(0.0, np.nan)).fillna(0.0)
+        short_scale = (balanced_gross / short_gross.replace(0.0, np.nan)).fillna(0.0)
+        limited = limited.clip(lower=0.0).mul(long_scale, axis=0) + limited.clip(upper=0.0).mul(
+            short_scale, axis=0
+        )
+    gross = limited.abs().sum(axis=1)
+    scale = (cfg.max_leverage / gross.replace(0.0, np.nan)).clip(upper=1.0).fillna(1.0)
+    return limited.mul(scale, axis=0)
+
+
+def _apply_rebalance_threshold(weights: pd.DataFrame, threshold: float) -> pd.DataFrame:
+    """Apply a causal per-position no-trade band to desired target weights."""
+    if threshold <= 0 or weights.empty:
+        return weights
+    rows: list[pd.Series] = []
+    previous = pd.Series(0.0, index=weights.columns)
+    for _, desired in weights.iterrows():
+        update = (desired - previous).abs() >= threshold
+        current = previous.where(~update, desired)
+        rows.append(current)
+        previous = current
+    return pd.DataFrame(rows, index=weights.index, columns=weights.columns)
 
 
 def _vol_target_overlay(
@@ -143,7 +193,7 @@ def _vol_target_overlay(
     )
     realized = realized.shift(1)  # only use information available before the day
     lev = (cfg.vol_target_annual / realized).clip(upper=max_leverage_cap)
-    return lev.fillna(1.0)
+    return pd.Series(lev.fillna(1.0), index=base_returns.index, dtype=float)
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +202,11 @@ def _vol_target_overlay(
 
 
 def _pivot(panel: pd.DataFrame, value_col: str) -> pd.DataFrame:
-    return panel.pivot_table(index=DATE_COL, columns=TICKER_COL, values=value_col)
+    if panel.duplicated([DATE_COL, TICKER_COL]).any():
+        raise ValueError("price panel must contain at most one row per (date, ticker)")
+    # ``pivot`` retains dates whose values are all missing; ``pivot_table``
+    # silently drops them and can therefore hide an unavailable held return.
+    return panel.pivot(index=DATE_COL, columns=TICKER_COL, values=value_col)
 
 
 def run_backtest(
@@ -184,54 +238,76 @@ def run_backtest(
     risk_config = risk_config or RiskConfig()
     fee = (config.cost_bps + config.slippage_bps) / 1e4
 
-    # Wide matrices.
-    scores_wide = signals.pivot_table(index=DATE_COL, columns=TICKER_COL, values=score_col)
-    returns_wide = _pivot(panel, "return")
+    required_signal_cols = {DATE_COL, TICKER_COL, score_col}
+    missing_signal_cols = required_signal_cols.difference(signals.columns)
+    if missing_signal_cols:
+        raise ValueError(f"signals missing required columns: {sorted(missing_signal_cols)}")
+    if signals.duplicated([DATE_COL, TICKER_COL]).any():
+        raise ValueError("signals must contain at most one score per (date, ticker)")
 
-    # Restrict to the signal window and align.
+    # Wide matrices.
+    scores_wide = signals.pivot(index=DATE_COL, columns=TICKER_COL, values=score_col)
+    returns_wide = _pivot(panel, "return")
+    scores_wide.index = pd.to_datetime(scores_wide.index)
+    returns_wide.index = pd.to_datetime(returns_wide.index)
+
+    # Restrict to the signal window and align. The calendar extends by the
+    # execution lag so the final observed decisions can realize a return.
     scores_wide = scores_wide.sort_index()
-    returns_wide = returns_wide.reindex(
-        index=scores_wide.index.union(returns_wide.index)
-    ).sort_index()
+    returns_wide = returns_wide.sort_index()
     # Use the benchmark column from the full universe if present.
     common_cols = [c for c in scores_wide.columns if c in returns_wide.columns]
+    if not common_cols:
+        raise ValueError("signals and price panel have no tickers in common")
     scores_wide = scores_wide[common_cols]
 
-    # Target weights from scores.
-    weights = _build_weights(scores_wide, config)
+    return_dates = returns_wide.index
+    signal_start = int(return_dates.searchsorted(scores_wide.index.min(), side="left"))
+    signal_end = int(return_dates.searchsorted(scores_wide.index.max(), side="right"))
+    calendar_end = min(len(return_dates), signal_end + config.execution_lag)
+    calendar = return_dates[signal_start:calendar_end]
+    if len(calendar) <= config.execution_lag:
+        raise ValueError("not enough return dates after the signal window for execution")
 
-    # Align returns to weight dates (forward return earned next day).
-    aligned_returns = returns_wide.reindex(columns=weights.columns)
-    # Realised strategy return at date t uses weights from t-1.
-    w_lag = weights.shift(1)
-    gross = (w_lag * aligned_returns.reindex(index=weights.index)).sum(axis=1)
+    # Build desired weights only when a signal exists. Missing signal dates hold
+    # the previous target rather than disappearing from the P&L calendar.
+    desired = _build_weights(scores_wide, config).reindex(calendar).ffill().fillna(0.0)
+    desired = _apply_rebalance_threshold(desired, config.rebalance_threshold)
+    desired = _enforce_portfolio_limits(desired, config)
+
+    # Close-derived decisions become held weights only after the declared lag.
+    weights = desired.shift(config.execution_lag)
+    active = weights.notna().any(axis=1)
+    weights = weights.loc[active].fillna(0.0)
+    aligned_returns = returns_wide.reindex(index=weights.index, columns=weights.columns)
+    unavailable = aligned_returns.isna() & weights.abs().gt(1e-12)
+    if unavailable.any().any():
+        examples = unavailable.stack()[lambda values: values].index.tolist()[:5]
+        raise ValueError(f"missing asset returns for active positions; examples={examples}")
+    gross = (weights * aligned_returns).sum(axis=1, min_count=1)
 
     # Optional volatility-target leverage overlay (causal).
     if config.position_sizing == "vol_target":
         overlay = _vol_target_overlay(gross, config)
         weights = weights.mul(overlay, axis=0)
-        w_lag = weights.shift(1)
-        gross = (w_lag * aligned_returns.reindex(index=weights.index)).sum(axis=1)
+        weights = _enforce_portfolio_limits(weights, config)
+        gross = (weights * aligned_returns).sum(axis=1, min_count=1)
 
     # Turnover & costs.
-    turnover = (weights - weights.shift(1)).abs().sum(axis=1).fillna(weights.abs().sum(axis=1))
-    cost = turnover.shift(1).fillna(0.0) * fee
-    net = (gross - cost).fillna(0.0)
-
-    # Trim leading all-NaN/zero warmup (first row has no prior weights).
-    net = net.iloc[1:]
-    gross = gross.iloc[1:]
-    turnover = turnover.iloc[1:]
-    weights = weights.iloc[1:]
+    previous = weights.shift(1).fillna(0.0)
+    turnover = (weights - previous).abs().sum(axis=1)
+    cost = turnover * fee
+    net = gross - cost
 
     equity = config.initial_capital * (1.0 + net).cumprod()
 
     # Benchmark: buy & hold over the same window.
     if benchmark in returns_wide.columns:
-        bench_ret = returns_wide[benchmark].reindex(net.index).fillna(0.0)
+        bench_ret = returns_wide[benchmark].reindex(net.index)
+        if bench_ret.isna().any():
+            raise ValueError(f"benchmark '{benchmark}' has missing returns in evaluation window")
     else:
-        logger.warning("Benchmark '%s' missing; using zero benchmark", benchmark)
-        bench_ret = pd.Series(0.0, index=net.index)
+        raise ValueError(f"benchmark '{benchmark}' missing from price panel")
     bench_equity = config.initial_capital * (1.0 + bench_ret).cumprod()
 
     # Stats.
@@ -258,6 +334,7 @@ def run_backtest(
         benchmark_equity=bench_equity,
         weights=weights,
         turnover=turnover,
+        costs=cost,
         drawdown=drawdown_series(net),
         exposures=exposure_summary(weights),
         stats=stats,

@@ -1,0 +1,68 @@
+# Licensed real-data ingestion profile for Signal Foundry Sprint 01.
+#
+# The API key is intentionally absent. Resolve NASDAQ_DATA_LINK_API_KEY from
+# macOS Keychain only for the bounded ingestion process. Generated vendor data
+# and bundles remain ignored and local.
+
+project:
+  name: signal_foundry_real_data
+  seed: 42
+  description: "Bounded licensed-data ingestion and Signal Foundry contract export."
+
+data:
+  source: nasdaq_data_link
+  allow_synthetic_fallback: false
+  tickers: [SPY, QQQ, AAPL, MSFT, NVDA, JPM, TLT]
+  benchmark: SPY
+  start: "2015-01-01"
+  end: "2026-06-30"
+  raw_dir: data/raw
+  processed_dir: data/processed
+  price_field: adj_close
+  min_observations: 252
+  nasdaq_data_link:
+    table: SHARADAR/SEP
+    cache_mode: prefer_cache
+    cache_dir: data/vendor/nasdaq-data-link
+    requests_per_minute: 30
+    max_requests: 100
+    page_size: 10000
+    timeout_seconds: 30
+    max_retries: 3
+    retry_backoff_seconds: 1
+    availability_lag_hours: 8
+
+model:
+  task: classification
+  target: direction
+  type: logistic
+  forward_horizon: 1
+  cv:
+    scheme: walk_forward
+    n_splits: 5
+    test_size: 126
+    min_train_size: 504
+    embargo: 5
+
+backtest:
+  strategy: long_short
+  signal: model
+  top_quantile: 0.3
+  cost_bps: 3
+  slippage_bps: 2
+  initial_capital: 1000000
+  max_leverage: 1
+  max_position_weight: 0.2
+  rebalance_threshold: 0.02
+  execution_lag: 2
+
+tracking:
+  backend: json
+  experiment_name: signal_foundry_real_data
+  json_dir: experiments/runs
+
+report:
+  output_dir: reports/signal-foundry
+  figures_dir: reports/signal-foundry/figures
+  format: markdown
+  title: "Signal Foundry — Licensed-Data Research Evidence"

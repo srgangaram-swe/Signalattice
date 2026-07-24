@@ -1,0 +1,86 @@
+# Optional deep-learning experiment. Install with `pip install -e '.[dev,torch]'`.
+# Sequences are keyed by ticker and end at the labelled observation; the TCN
+# never windows across assets. Results remain synthetic engineering evidence.
+
+project:
+  name: synthetic_causal_tcn
+  seed: 42
+  description: "Ticker-isolated causal TCN with chronological early stopping."
+
+data:
+  source: synthetic
+  tickers: [SPY, QQQ, AAPL, MSFT, NVDA, JPM, TLT, XOM, GLD, IWM]
+  benchmark: SPY
+  start: "2015-01-01"
+  price_field: adj_close
+  min_observations: 252
+  synthetic:
+    n_days: 2200
+    start: "2015-01-01"
+    annual_drift: 0.08
+    annual_vol: 0.22
+    market_beta_mean: 1.0
+    market_vol: 0.16
+    market_autocorrelation: 0.30
+    idiosyncratic_autocorrelation: 0.20
+
+features:
+  cross_sectional: true
+  dropna: true
+
+model:
+  task: classification
+  target: direction
+  forward_horizon: 1
+  type: tcn
+  standardize: true
+  params:
+    sequence_length: 20
+    channels: 32
+    num_blocks: 3
+    kernel_size: 3
+    dropout: 0.15
+    lr: 0.001
+    weight_decay: 0.0001
+    epochs: 30
+    batch_size: 256
+    validation_fraction: 0.20
+    patience: 5
+  cv:
+    scheme: walk_forward
+    n_splits: 4
+    test_size: 126
+    min_train_size: 504
+    embargo: 5
+
+backtest:
+  strategy: long_short
+  signal: model
+  top_quantile: 0.30
+  cost_bps: 1.0
+  slippage_bps: 0.5
+  initial_capital: 1000000
+  max_leverage: 1.0
+  position_sizing: equal_weight
+  signal_selection: quantile
+  max_position_weight: 0.34
+  rebalance_threshold: 0.02
+  execution_lag: 2
+
+evaluation:
+  cost_grid_bps: [0.0, 1.5, 3.0, 5.0, 10.0, 25.0]
+  delay_bars: [0, 1, 2, 3, 5]
+  aum_grid_usd: [1000000, 5000000, 10000000, 25000000]
+  readiness_aum_usd: 1000000
+  max_participation_rate: 0.01
+  latency_budget_ms: 1000.0
+
+tracking:
+  backend: sqlite
+  experiment_name: synthetic_causal_tcn
+
+report:
+  output_dir: reports/tcn
+  figures_dir: reports/tcn/figures
+  format: markdown
+  title: "Signalattice — Causal Panel TCN"
