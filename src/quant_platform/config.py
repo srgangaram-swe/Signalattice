@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 from typing import Any, Literal
 
+import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -52,10 +53,47 @@ class SyntheticConfig(_Base):
     idiosyncratic_autocorrelation: float = Field(default=-0.05, gt=-0.95, lt=0.95)
 
 
+class NasdaqDataLinkConfig(_Base):
+    """Bounded Nasdaq Data Link table-API configuration.
+
+    The API credential is deliberately absent. Runtime code resolves only the
+    ``NASDAQ_DATA_LINK_API_KEY`` environment variable so serialized
+    configurations and run manifests cannot contain the secret.
+    """
+
+    table: str = "SHARADAR/SEP"
+    cache_mode: Literal["prefer_cache", "network", "cache_only"] = "prefer_cache"
+    cache_dir: str = "data/vendor/nasdaq-data-link"
+    requests_per_minute: int = Field(default=30, ge=1, le=300)
+    max_requests: int = Field(default=100, ge=1, le=10_000)
+    page_size: int = Field(default=10_000, ge=1, le=10_000)
+    timeout_seconds: float = Field(default=30.0, gt=0.0, le=120.0)
+    max_retries: int = Field(default=3, ge=0, le=8)
+    retry_backoff_seconds: float = Field(default=1.0, gt=0.0, le=60.0)
+    availability_lag_hours: int = Field(default=8, ge=1, le=168)
+
+    @field_validator("table")
+    @classmethod
+    def _validate_table(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        parts = normalized.split("/")
+        if len(parts) != 2 or not all(part.replace("_", "").isalnum() for part in parts):
+            raise ValueError("`data.nasdaq_data_link.table` must be DATABASE/TABLE")
+        return normalized
+
+    @field_validator("cache_dir")
+    @classmethod
+    def _safe_cache_dir(cls, value: str) -> str:
+        path = Path(value)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError("`data.nasdaq_data_link.cache_dir` must be a safe relative path")
+        return value
+
+
 class DataConfig(_Base):
     """Market-data ingestion configuration."""
 
-    source: Literal["yfinance", "stooq", "synthetic", "auto"] = "auto"
+    source: Literal["yfinance", "stooq", "nasdaq_data_link", "synthetic", "auto"] = "auto"
     allow_synthetic_fallback: bool = False
     tickers: list[str] = Field(default_factory=lambda: ["SPY", "QQQ", "AAPL"])
     benchmark: str = "SPY"
@@ -67,7 +105,15 @@ class DataConfig(_Base):
     max_retries: int = 3
     retry_backoff_seconds: float = 1.5
     min_observations: int = 252
+    nasdaq_data_link: NasdaqDataLinkConfig = Field(default_factory=NasdaqDataLinkConfig)
     synthetic: SyntheticConfig = Field(default_factory=SyntheticConfig)
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> DataConfig:
+        start = pd.Timestamp(self.start)
+        if self.end is not None and pd.Timestamp(self.end) < start:
+            raise ValueError("`data.end` must be on or after `data.start`")
+        return self
 
     @field_validator("tickers")
     @classmethod

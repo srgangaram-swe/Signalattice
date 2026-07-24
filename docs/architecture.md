@@ -106,6 +106,8 @@ diagram annotations.
 Typical outputs are:
 
 - raw per-ticker snapshots: `data/raw/*.parquet`;
+- immutable licensed-provider snapshots: `data/vendor/nasdaq-data-link/`;
+- versioned AlphaForge exchange bundles: `data/signal-foundry-bundles/<bundle-id>/`;
 - panel and source metadata: `data/processed/price_panel.parquet` and
   `panel_metadata.json`;
 - feature matrix and manifest: `data/processed/features.parquet` and its fingerprint
@@ -120,9 +122,11 @@ example report that can be regenerated from its config and seed.
 
 ## Deployment boundary
 
-Signalattice stops at research decision-readiness. It does not implement a market-data
-feed handler, feature store with as-of joins, portfolio optimizer, broker adapter, order
-management system, pre-trade risk service, or post-trade ledger. Its latency result covers
-warm model inference only. Its capacity result covers trailing dollar-volume participation
-only. Those exclusions are intentional and remain visible in the report and
+Signalattice stops at research decision-readiness. It now implements a bounded historical
+Nasdaq Data Link adapter and a versioned as-of dataset exchange contract; neither is a
+real-time market-data feed handler or proof of complete point-in-time history. It does not
+implement a general feature store, portfolio optimizer, broker adapter, order management
+system, pre-trade risk service, or post-trade ledger. Its latency result covers warm model
+inference only. Its capacity result covers trailing dollar-volume participation only.
+Those exclusions are intentional and remain visible in the report and
 [data card](data_card.md).

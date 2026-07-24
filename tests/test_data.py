@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import json
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -10,6 +12,7 @@ import pytest
 
 from quant_platform.config import DataConfig
 from quant_platform.data.ingest import _fetch_raw, ingest, load_processed
+from quant_platform.data.nasdaq_data_link import FetchResult
 from quant_platform.data.schema import OHLCV_COLUMNS, PANEL_COLUMNS, coerce_panel_dtypes
 from quant_platform.data.sources import DataSourceError
 from quant_platform.data.validation import DataValidationError, validate_price_panel
@@ -162,9 +165,10 @@ def test_auto_source_uses_synthetic_only_when_explicitly_enabled(monkeypatch):
         synthetic={"n_days": 20},
     )
 
-    panel, source = _fetch_raw(cfg, seed=3)
+    panel, source, source_manifest = _fetch_raw(cfg, seed=3)
 
     assert source == "synthetic"
+    assert source_manifest is None
     assert set(panel["ticker"]) == {"SPY", "AAA"}
 
 
@@ -203,3 +207,58 @@ def test_returns_have_no_inf(synthetic_panel):
     grp = synthetic_panel.groupby("ticker")["adj_close"]
     rets = synthetic_panel["adj_close"] / grp.shift(1) - 1.0
     assert not np.isinf(rets.dropna()).any()
+
+
+def test_nasdaq_source_integrates_redacted_manifest_into_panel_metadata(tmp_path, monkeypatch):
+    from quant_platform.config import SyntheticConfig
+    from quant_platform.data.synthetic import generate_synthetic_panel
+
+    panel = generate_synthetic_panel(
+        ["SPY"],
+        benchmark="SPY",
+        config=SyntheticConfig(n_days=20, start="2024-01-01"),
+        seed=9,
+    )
+    effective = pd.to_datetime(panel["date"], utc=True) + pd.Timedelta(hours=21)
+    panel["effective_at"] = effective
+    panel["available_at"] = effective + pd.Timedelta(hours=8)
+    panel["observed_at"] = pd.Timestamp("2026-07-23T00:00:00Z")
+    panel["provider_updated_at"] = pd.Timestamp("2026-07-20T00:00:00Z")
+    panel["source"] = "nasdaq_data_link"
+    panel["source_table"] = "SHARADAR/SEP"
+    panel["instrument_id"] = panel["ticker"]
+    panel["currency"] = "USD"
+    panel["exchange_calendar"] = "XNYS"
+    panel["adjustment_state"] = "provider_adjusted_close_unadjusted_ohlc"
+    manifest = {
+        "provider": "nasdaq_data_link",
+        "request": {"table": "SHARADAR/SEP"},
+        "request_hash": "a" * 64,
+        "snapshot_hash": "b" * 64,
+        "retrieved_at": datetime(2026, 7, 23, tzinfo=UTC).isoformat(),
+        "contains_api_key": False,
+    }
+
+    def fake_fetch(*_args, **_kwargs):
+        return FetchResult(panel=panel, manifest=manifest, snapshot_dir=tmp_path / "snapshot")
+
+    ingest_module = importlib.import_module("quant_platform.data.ingest")
+    monkeypatch.setattr(ingest_module, "fetch_nasdaq_data_link", fake_fetch)
+    config = DataConfig(
+        source="nasdaq_data_link",
+        tickers=["SPY"],
+        benchmark="SPY",
+        start="2024-01-01",
+        end="2024-02-01",
+        raw_dir="raw",
+        processed_dir="processed",
+        min_observations=1,
+    )
+
+    ingested = ingest(config, base_dir=tmp_path)
+    metadata = json.loads((tmp_path / "processed/panel_metadata.json").read_text())
+
+    assert len(ingested) == len(panel)
+    assert metadata["source"] == "nasdaq_data_link"
+    assert metadata["source_manifest"]["snapshot_hash"] == "b" * 64
+    assert "representative-secret-value" not in json.dumps(metadata)

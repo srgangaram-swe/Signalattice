@@ -234,6 +234,8 @@ tests/                      unit and integration contracts
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Nasdaq Data Link ingestion boundary](docs/nasdaq_data_link.md)
+- [Signal Foundry dataset contract](docs/signal_foundry_contract.md)
 - [Methodology](docs/methodology.md)
 - [Model card](docs/model_card.md)
 - [Data card](docs/data_card.md)

@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from quant_platform.config import DataConfig
+from quant_platform.data.nasdaq_data_link import fetch_nasdaq_data_link
 from quant_platform.data.schema import DATE_COL, TICKER_COL, coerce_panel_dtypes
 from quant_platform.data.sources import DataSourceError, fetch_stooq, fetch_yfinance
 from quant_platform.data.synthetic import generate_synthetic_panel
@@ -45,10 +46,15 @@ def _add_return_columns(df: pd.DataFrame, price_field: str) -> pd.DataFrame:
     return out
 
 
-def _fetch_raw(config: DataConfig, *, seed: int) -> tuple[pd.DataFrame, str]:
+def _fetch_raw(
+    config: DataConfig,
+    *,
+    seed: int,
+    base_dir: str | Path | None = None,
+) -> tuple[pd.DataFrame, str, dict[str, object] | None]:
     """Fetch raw data according to the configured, fail-closed source policy.
 
-    Returns a tuple of ``(panel, source_used)``.
+    Returns ``(panel, source_used, redacted_source_manifest)``.
     """
     source = config.source
     tickers = config.tickers
@@ -62,6 +68,7 @@ def _fetch_raw(config: DataConfig, *, seed: int) -> tuple[pd.DataFrame, str]:
     last_error: Exception | None = None
     for src in order:
         try:
+            source_manifest: dict[str, object] | None = None
             if src == "yfinance":
                 panel = fetch_yfinance(
                     tickers,
@@ -78,6 +85,16 @@ def _fetch_raw(config: DataConfig, *, seed: int) -> tuple[pd.DataFrame, str]:
                     retries=config.max_retries,
                     backoff=config.retry_backoff_seconds,
                 )
+            elif src == "nasdaq_data_link":
+                result = fetch_nasdaq_data_link(
+                    config.nasdaq_data_link,
+                    tickers,
+                    config.start,
+                    config.end,
+                    base_dir=base_dir,
+                )
+                panel = result.panel
+                source_manifest = result.manifest
             elif src == "synthetic":
                 panel = generate_synthetic_panel(
                     tickers,
@@ -92,7 +109,7 @@ def _fetch_raw(config: DataConfig, *, seed: int) -> tuple[pd.DataFrame, str]:
             if missing:
                 raise DataSourceError(f"source '{src}' omitted requested tickers: {missing}")
             logger.info("Ingested data using source='%s'", src)
-            return panel, src
+            return panel, src, source_manifest
         except DataSourceError as exc:
             last_error = exc
             logger.warning("Source '%s' unavailable: %s", src, exc)
@@ -158,7 +175,7 @@ def ingest(
             return load_processed(processed_dir)
         logger.info("Cached panel fingerprint is stale; rebuilding %s", out_path)
 
-    panel, source_used = _fetch_raw(config, seed=seed)
+    panel, source_used, source_manifest = _fetch_raw(config, seed=seed, base_dir=base_dir)
     panel = coerce_panel_dtypes(panel)
 
     # Drop fully-empty rows and clip the date window.
@@ -198,6 +215,7 @@ def ingest(
         "config_hash": config_hash,
         "seed": seed,
         "synthetic": source_used == "synthetic",
+        "source_manifest": source_manifest,
     }
     metadata_tmp = metadata_path.with_suffix(".tmp.json")
     metadata_tmp.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
