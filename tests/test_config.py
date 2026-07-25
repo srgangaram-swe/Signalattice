@@ -109,6 +109,27 @@ def test_nasdaq_data_link_config_is_strict_and_has_no_secret_field():
 
 
 @pytest.mark.parametrize(
+    ("path", "expected_tickers", "expected_benchmark"),
+    [
+        ("configs/nasdaq_smoke.yaml", ["AAPL"], "AAPL"),
+        (
+            "configs/nasdaq_data_link.yaml",
+            ["AAPL", "MSFT", "NVDA", "JPM", "XOM"],
+            "AAPL",
+        ),
+    ],
+)
+def test_committed_sep_profiles_use_equity_universes(path, expected_tickers, expected_benchmark):
+    cfg = load_config(path)
+
+    assert cfg.data.source == "nasdaq_data_link"
+    assert cfg.data.nasdaq_data_link.table == "SHARADAR/SEP"
+    assert cfg.data.tickers == expected_tickers
+    assert cfg.data.benchmark == expected_benchmark
+    assert cfg.data.allow_synthetic_fallback is False
+
+
+@pytest.mark.parametrize(
     "nasdaq_config",
     [
         {"table": "not-a-table"},
