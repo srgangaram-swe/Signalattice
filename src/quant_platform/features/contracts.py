@@ -1,4 +1,4 @@
-"""Versioned, self-describing feature contracts (Signal Foundry SF-S2-MR1/MR2).
+"""Versioned, self-describing feature contracts (Signal Foundry SF-S2-MR1..MR3).
 
 A :class:`FeatureContract` pairs a *causal* computation kernel with the metadata
 a research platform needs to reason about a feature without reading its code:
@@ -20,7 +20,8 @@ Design invariants
   Genuine gaps (``NaN``) propagate rather than being silently imputed.
 * **No new mathematics.** Kernels compose the audited primitives in
   :mod:`quant_platform.features.technical`,
-  :mod:`quant_platform.features.statistics`, and
+  :mod:`quant_platform.features.statistics`,
+  :mod:`quant_platform.features.liquidity`, and
   :mod:`quant_platform.features.cross_sectional`; this module adds the contract,
   metadata, and registry layer only.
 
@@ -41,6 +42,7 @@ import numpy as np
 import pandas as pd
 
 from quant_platform.data.schema import DATE_COL, TICKER_COL
+from quant_platform.features import liquidity as lq
 from quant_platform.features import statistics as st
 from quant_platform.features import technical as ta
 from quant_platform.features.cross_sectional import (
@@ -72,6 +74,7 @@ class FeatureFamily(StrEnum):
     VOLATILITY = "volatility"
     DISTRIBUTION = "distribution"
     DEPENDENCE = "dependence"
+    LIQUIDITY = "liquidity"
 
 
 class Unit(StrEnum):
@@ -87,6 +90,9 @@ class Unit(StrEnum):
     CORRELATION = "correlation"  # Pearson-style coefficient in [-1, 1]
     INFORMATION_NATS = "information_nats"  # mutual information in nats (>= 0)
     DIMENSIONLESS = "dimensionless"  # pure number (skew, kurtosis, Hurst, ratio)
+    LOG_DOLLAR_VOLUME = "log_dollar_volume"  # natural log of traded dollar value
+    ILLIQUIDITY = "illiquidity"  # Amihud: return per million dollars traded
+    SPREAD_FRACTION = "spread_fraction"  # estimated bid-ask spread as a fraction
 
 
 class MissingDataPolicy(StrEnum):
@@ -884,12 +890,224 @@ def statistical_contracts() -> tuple[FeatureContract, ...]:
 
 
 # ---------------------------------------------------------------------------
+# Liquidity contract builders (SF-S2-MR3): volume, liquidity, spread, impact
+# ---------------------------------------------------------------------------
+
+
+def _volume_change_contract(periods: int) -> FeatureContract:
+    warmup = periods + 1
+    return FeatureContract(
+        name=f"volume_change_{periods}",
+        version="1.0.0",
+        family=FeatureFamily.LIQUIDITY,
+        scope=Scope.PER_ASSET,
+        unit=Unit.DIMENSIONLESS,
+        description=f"Log change in volume over {periods} bar(s).",
+        inputs=("volume",),
+        params=(("periods", periods),),
+        lookback=warmup,
+        warmup=warmup,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(lq.volume_change(group["volume"], periods), warmup),
+        ),
+    )
+
+
+def _dollar_volume_contract(window: int) -> FeatureContract:
+    return FeatureContract(
+        name=f"dollar_volume_{window}",
+        version="1.0.0",
+        family=FeatureFamily.LIQUIDITY,
+        scope=Scope.PER_ASSET,
+        unit=Unit.LOG_DOLLAR_VOLUME,
+        description=f"Trailing {window}-bar mean of log traded dollar value (liquidity level).",
+        inputs=("close", "volume"),
+        params=(("window", window),),
+        lookback=window,
+        warmup=window,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(
+                lq.rolling_log_dollar_volume(group["close"], group["volume"], window), window
+            ),
+        ),
+    )
+
+
+def _relative_volume_contract(window: int) -> FeatureContract:
+    return FeatureContract(
+        name=f"rel_volume_{window}",
+        version="1.0.0",
+        family=FeatureFamily.LIQUIDITY,
+        scope=Scope.PER_ASSET,
+        unit=Unit.DIMENSIONLESS,
+        description=f"Volume relative to its trailing {window}-bar mean.",
+        inputs=("volume",),
+        params=(("window", window),),
+        lookback=window,
+        warmup=window,
+        numerical_range=_NON_NEGATIVE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(lq.relative_volume(group["volume"], window), window),
+        ),
+    )
+
+
+def _amihud_contract(window: int, scale: int = 1_000_000) -> FeatureContract:
+    warmup = window + 1
+    return FeatureContract(
+        name=f"amihud_{window}",
+        version="1.0.0",
+        family=FeatureFamily.LIQUIDITY,
+        scope=Scope.PER_ASSET,
+        unit=Unit.ILLIQUIDITY,
+        description=(
+            f"Amihud illiquidity: trailing {window}-bar mean of |return| per "
+            f"{scale:,} dollars traded (price-impact proxy)."
+        ),
+        inputs=("close", "volume"),
+        params=(("window", window), ("scale", scale)),
+        lookback=warmup,
+        warmup=warmup,
+        numerical_range=_NON_NEGATIVE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(
+                lq.amihud_illiquidity(group["close"], group["volume"], window, scale=scale),
+                warmup,
+            ),
+        ),
+    )
+
+
+def _volume_imbalance_contract(window: int) -> FeatureContract:
+    warmup = window + 1
+    return FeatureContract(
+        name=f"volume_imbalance_{window}",
+        version="1.0.0",
+        family=FeatureFamily.LIQUIDITY,
+        scope=Scope.PER_ASSET,
+        unit=Unit.DIMENSIONLESS,
+        description=f"Signed-volume imbalance over {window} bars (return-sign proxy), in [-1, 1].",
+        inputs=("close", "volume"),
+        params=(("window", window),),
+        lookback=warmup,
+        warmup=warmup,
+        numerical_range=_CORRELATION_RANGE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(
+                lq.volume_imbalance(group["close"], group["volume"], window), warmup
+            ),
+        ),
+    )
+
+
+def _corwin_schultz_contract(window: int) -> FeatureContract:
+    warmup = window + 1
+    return FeatureContract(
+        name=f"corwin_schultz_{window}",
+        version="1.0.0",
+        family=FeatureFamily.LIQUIDITY,
+        scope=Scope.PER_ASSET,
+        unit=Unit.SPREAD_FRACTION,
+        description=f"Trailing {window}-bar Corwin-Schultz high-low spread estimate (fraction).",
+        inputs=("high", "low"),
+        params=(("window", window),),
+        lookback=warmup,
+        warmup=warmup,
+        numerical_range=_NON_NEGATIVE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(
+                lq.corwin_schultz_spread(group["high"], group["low"], window), warmup
+            ),
+        ),
+    )
+
+
+def _roll_spread_contract(window: int) -> FeatureContract:
+    warmup = window + 2
+    return FeatureContract(
+        name=f"roll_spread_{window}",
+        version="1.0.0",
+        family=FeatureFamily.LIQUIDITY,
+        scope=Scope.PER_ASSET,
+        unit=Unit.SPREAD_FRACTION,
+        description=f"Trailing {window}-bar Roll implied effective spread (fraction).",
+        inputs=("close",),
+        params=(("window", window),),
+        lookback=warmup,
+        warmup=warmup,
+        numerical_range=_NON_NEGATIVE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(lq.roll_spread(group["close"], window), warmup),
+        ),
+    )
+
+
+def _turnover_contract(window: int) -> FeatureContract:
+    """Turnover requires a ``shares_outstanding`` column beyond OHLCV.
+
+    It is registered (discoverable via :func:`get_contract`) but deliberately
+    excluded from :func:`default_contracts`, so a plain OHLCV panel still builds;
+    request it explicitly and supply the extra column.
+    """
+    return FeatureContract(
+        name=f"turnover_{window}",
+        version="1.0.0",
+        family=FeatureFamily.LIQUIDITY,
+        scope=Scope.PER_ASSET,
+        unit=Unit.DIMENSIONLESS,
+        description=(
+            f"Trailing {window}-bar mean share turnover (volume / shares_outstanding). "
+            "Requires a shares_outstanding column."
+        ),
+        inputs=("volume", "shares_outstanding"),
+        params=(("window", window),),
+        lookback=window,
+        warmup=window,
+        numerical_range=_NON_NEGATIVE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(
+                lq.turnover(group["volume"], group["shares_outstanding"], window), window
+            ),
+        ),
+    )
+
+
+def liquidity_contracts() -> tuple[FeatureContract, ...]:
+    """The frozen SF-S2-MR3 OHLCV-computable volume, liquidity, and spread contracts.
+
+    Turnover is excluded here because it needs an extra ``shares_outstanding``
+    column; obtain it via ``get_contract("turnover_21")``.
+    """
+    return (
+        _volume_change_contract(1),
+        _dollar_volume_contract(21),
+        _relative_volume_contract(21),
+        _amihud_contract(21),
+        _volume_imbalance_contract(21),
+        _corwin_schultz_contract(21),
+        _roll_spread_contract(21),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
 
 def default_contracts() -> tuple[FeatureContract, ...]:
-    """The frozen default set of SF-S2-MR1 and SF-S2-MR2 feature contracts."""
+    """The frozen default set of SF-S2-MR1, MR2, and MR3 feature contracts.
+
+    Contains only contracts computable from a canonical OHLCV panel. Turnover
+    (which needs ``shares_outstanding``) is registered but not included here.
+    """
     return (
         # Returns.
         _return_contract(1),
@@ -918,12 +1136,16 @@ def default_contracts() -> tuple[FeatureContract, ...]:
         _cross_sectional_zscore_contract(63),
         # Volatility, distribution, and dependence (SF-S2-MR2).
         *statistical_contracts(),
+        # Volume, liquidity, spread, and impact (SF-S2-MR3).
+        *liquidity_contracts(),
     )
 
 
 def _build_registry() -> dict[str, FeatureContract]:
+    # The registry is discoverable via get_contract/list_contracts and includes
+    # data-dependent contracts (turnover) that are not in the default OHLCV set.
     registry: dict[str, FeatureContract] = {}
-    for contract in default_contracts():
+    for contract in (*default_contracts(), _turnover_contract(21)):
         if contract.name in registry:  # pragma: no cover - guards developer error
             raise ValueError(f"duplicate feature contract name '{contract.name}'")
         registry[contract.name] = contract
