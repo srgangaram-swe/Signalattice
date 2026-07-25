@@ -1,9 +1,9 @@
 {
-  "bundle_id": "c585dd09e089d86f4fa1933be404f686e9f708509126fb59d01cbd4ac04d0916",
+  "bundle_id": "63bc9af39ed5199cf4027355163c95767c8530b31af9d986a9e7a18006c0e26f",
   "contract": "signal-foundry-market-data",
   "date_max": "2018-03-27",
   "date_min": "2013-01-02",
-  "evidence_generated_at": "2026-07-25T05:22:28Z",
+  "evidence_generated_at": "2026-07-25T06:06:36Z",
   "files": {
     "count": 6,
     "partitioning": "calendar year"
@@ -18,9 +18,14 @@
     "historical_revisions_complete": false,
     "universe_membership_point_in_time": false
   },
-  "producer_git_sha": "7120a39f467553d063b424578ca5477da44f94b6",
+  "producer_git_sha": "40a5097e68ee1d0b3447e343cdc67ccb452a09f3",
+  "record_families": {
+    "corporate_action_rows": 0,
+    "price_rows": 13169,
+    "universe_rows": 0
+  },
   "rows": 13169,
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "source_manifest_sha256": "ab2641323c068cf3b7ce7c2fee4cfc16f455d129a31f305eb4ebc30d5e1c7ed1",
   "source_snapshot_hash": "c3e99355476ddc7370b9921b8d9495cf0e62ed52f04c83f68ac4ca9ad8bcc96d",
   "tickers": [
