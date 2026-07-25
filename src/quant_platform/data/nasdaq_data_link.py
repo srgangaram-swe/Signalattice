@@ -61,7 +61,13 @@ class HttpResponse:
 class HttpTransport(Protocol):
     """Minimal injectable HTTP transport."""
 
-    def get(self, url: str, *, timeout: float) -> HttpResponse:
+    def get(
+        self,
+        url: str,
+        *,
+        timeout: float,
+        headers: Mapping[str, str],
+    ) -> HttpResponse:
         """Return one HTTP response without logging ``url``."""
 
 
@@ -84,12 +90,19 @@ class UrllibTransport:
             )
         return body
 
-    def get(self, url: str, *, timeout: float) -> HttpResponse:
+    def get(
+        self,
+        url: str,
+        *,
+        timeout: float,
+        headers: Mapping[str, str],
+    ) -> HttpResponse:
         request = urllib.request.Request(
             url,
             headers={
                 "Accept": "application/json",
                 "User-Agent": "Signalattice/0.2 (+https://github.com/srgangaram-swe/Signalattice)",
+                **headers,
             },
             method="GET",
         )
@@ -101,7 +114,7 @@ class UrllibTransport:
                     body=self._read_bounded(response),
                 )
         except urllib.error.HTTPError as exc:
-            # Do not stringify HTTPError: its URL contains the API key.
+            # Do not stringify HTTPError: provider and proxy URLs remain sensitive.
             return HttpResponse(
                 status=int(exc.code),
                 headers={key.lower(): value for key, value in exc.headers.items()},
@@ -405,7 +418,6 @@ class NasdaqDataLinkClient:
         api_key: str,
     ) -> dict[str, Any]:
         params: dict[str, str | int] = {
-            "api_key": api_key,
             "ticker": ",".join(request["tickers"]),
             "date.gte": request["start"],
             "qopts.per_page": self.config.page_size,
@@ -432,14 +444,13 @@ class NasdaqDataLinkClient:
         encoded_database = urllib.parse.quote(self.config.table, safe="")
         encoded_dataset = urllib.parse.quote(dataset_code, safe="")
         params: dict[str, str] = {
-            "api_key": api_key,
             "start_date": request["start"],
             "order": "asc",
         }
         if request["end"] is not None:
             params["end_date"] = request["end"]
         url = (
-            f"{TIME_SERIES_API_ROOT}/{encoded_database}/{encoded_dataset}.json?"
+            f"{TIME_SERIES_API_ROOT}/{encoded_database}/{encoded_dataset}/data.json?"
             f"{urllib.parse.urlencode(params)}"
         )
         return self._request_json(url=url, api_key=api_key)
@@ -448,7 +459,15 @@ class NasdaqDataLinkClient:
         """Perform one redacted, budgeted JSON request with bounded retries."""
         for retry in range(self.config.max_retries + 1):
             self.budget.before_request()
-            response = self.transport.get(url, timeout=self.config.timeout_seconds)
+            response = self.transport.get(
+                url,
+                timeout=self.config.timeout_seconds,
+                headers={
+                    "X-Api-Token": api_key,
+                    "Request-Source": "python",
+                    "Request-Source-Version": "Signalattice/0.2",
+                },
+            )
             if response.status == 200:
                 try:
                     payload = json.loads(response.body.decode("utf-8"))
@@ -467,7 +486,8 @@ class NasdaqDataLinkClient:
             if response.status in TERMINAL_AUTH_STATUS:
                 raise DataSourceError(
                     f"Nasdaq Data Link authentication/entitlement failed (HTTP {response.status}); "
-                    "credential and URL redacted"
+                    f"credential and URL redacted: "
+                    f"{_safe_error_message(response, api_key=api_key)}"
                 )
             if response.status not in RETRYABLE_STATUS or retry >= self.config.max_retries:
                 raise DataSourceError(
@@ -524,9 +544,9 @@ class NasdaqDataLinkClient:
     def _parse_time_series(
         payload: dict[str, Any],
     ) -> tuple[list[str], list[list[Any]], dict[str, Any]]:
-        dataset = payload.get("dataset")
+        dataset = payload.get("dataset_data")
         if not isinstance(dataset, dict):
-            raise DataSourceError("Nasdaq Data Link payload lacks a dataset object")
+            raise DataSourceError("Nasdaq Data Link payload lacks a dataset_data object")
         raw_columns = dataset.get("column_names")
         rows = dataset.get("data")
         database_code = dataset.get("database_code")
@@ -595,7 +615,11 @@ class NasdaqDataLinkClient:
         missing = sorted(required.difference(raw.columns))
         if missing:
             raise DataSourceError(f"Nasdaq Data Link table is missing required columns: {missing}")
-        adjusted = "closeadj" if "closeadj" in raw.columns else "close"
+        adjusted = (
+            "closeadj"
+            if "closeadj" in raw.columns
+            else "adj_close" if "adj_close" in raw.columns else "close"
+        )
         frame = raw.copy()
         frame["adj_close"] = raw[adjusted]
         if frame.columns.duplicated().any():
@@ -650,7 +674,7 @@ class NasdaqDataLinkClient:
         else:
             frame["adjustment_state"] = (
                 "provider_adjusted_close_unadjusted_ohlc"
-                if adjusted == "closeadj"
+                if adjusted in {"closeadj", "adj_close"}
                 else "provider_unadjusted"
             )
         columns = [

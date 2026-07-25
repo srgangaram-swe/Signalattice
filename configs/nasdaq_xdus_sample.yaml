@@ -1,14 +1,15 @@
-# Free engineering-data profile for the Nasdaq Data Link XDUS sample.
+# Entitlement-probe profile for the historically documented XDUS sample.
 #
 # XDUS contains Düsseldorf Stock Exchange history and is suitable for
 # exercising the ingestion/data-contract boundary. It is not representative
 # evidence for a U.S. equity strategy or a substitute for point-in-time
 # fundamentals, universe membership, or current production market data.
+# Availability is account/provider dependent; a 403 must fail closed.
 
 project:
   name: signal_foundry_xdus_engineering_sample
   seed: 42
-  description: "Bounded free-sample ingestion for data-platform validation."
+  description: "Bounded XDUS entitlement probe for data-platform validation."
 
 data:
   source: nasdaq_data_link

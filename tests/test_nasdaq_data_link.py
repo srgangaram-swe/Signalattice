@@ -69,7 +69,7 @@ def _time_series_payload(
     dataset_code = f"{ticker}_UADJ" if unadjusted else ticker
     return json.dumps(
         {
-            "dataset": {
+            "dataset_data": {
                 "database_code": "XDUS",
                 "dataset_code": dataset_code,
                 "column_names": [
@@ -100,8 +100,15 @@ class QueueTransport:
         self.responses = list(responses)
         self.calls = 0
 
-    def get(self, url: str, *, timeout: float) -> HttpResponse:
-        assert f"api_key={SECRET}" in url
+    def get(
+        self,
+        url: str,
+        *,
+        timeout: float,
+        headers: Mapping[str, str],
+    ) -> HttpResponse:
+        assert SECRET not in url
+        assert headers["X-Api-Token"] == SECRET
         assert timeout > 0
         self.calls += 1
         if not self.responses:
@@ -110,7 +117,13 @@ class QueueTransport:
 
 
 class NoNetworkTransport:
-    def get(self, url: str, *, timeout: float) -> HttpResponse:
+    def get(
+        self,
+        url: str,
+        *,
+        timeout: float,
+        headers: Mapping[str, str],
+    ) -> HttpResponse:
         raise AssertionError("cache replay attempted network access")
 
 
@@ -167,6 +180,32 @@ def test_paginated_fetch_is_hashed_redacted_and_cache_replayable(tmp_path):
 
     assert cached.manifest["snapshot_hash"] == first.manifest["snapshot_hash"]
     assert cached.panel.equals(first.panel)
+
+
+def test_tables_api_preserves_standard_adjusted_close_column(tmp_path):
+    columns = [*COLUMNS[:-2], "adj_close", "lastupdated"]
+    row = _row("AAPL", "2018-03-27", 100.0)
+    row[-2] = 75.0
+    body = json.dumps(
+        {
+            "datatable": {
+                "columns": [{"name": name, "type": "text"} for name in columns],
+                "data": [row],
+            },
+            "meta": {"next_cursor_id": None},
+        }
+    ).encode()
+    result = NasdaqDataLinkClient(
+        _config(tmp_path, table="WIKI/PRICES"),
+        transport=QueueTransport([_response(200, body)]),
+        secret_resolver=lambda: SECRET,
+        sleep=lambda _seconds: None,
+        now=lambda: datetime(2026, 7, 24, tzinfo=UTC),
+    ).fetch(["AAPL"], "2018-03-27", "2018-03-27", base_dir=tmp_path)
+
+    assert result.panel.loc[0, "close"] == 100.0
+    assert result.panel.loc[0, "adj_close"] == 75.0
+    assert result.panel.loc[0, "adjustment_state"] == ("provider_adjusted_close_unadjusted_ohlc")
 
 
 def test_time_series_fetch_is_bounded_normalised_and_cache_replayable(tmp_path):
@@ -441,8 +480,9 @@ def test_default_transport_redacts_timeout_url(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", unavailable)
     with pytest.raises(DataSourceError) as raised:
         UrllibTransport().get(
-            f"https://data.nasdaq.com/api/v3/datatables/X/Y.json?api_key={SECRET}",
+            "https://data.nasdaq.com/api/v3/datatables/X/Y.json",
             timeout=1.0,
+            headers={"X-Api-Token": SECRET},
         )
     assert SECRET not in str(raised.value)
 

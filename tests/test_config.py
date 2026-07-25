@@ -166,6 +166,19 @@ def test_committed_xdus_profile_is_bounded_engineering_data():
     assert cfg.data.allow_synthetic_fallback is False
 
 
+def test_committed_wiki_profile_is_bounded_static_engineering_data():
+    cfg = load_config("configs/nasdaq_wiki_sample.yaml")
+
+    assert cfg.data.source == "nasdaq_data_link"
+    assert cfg.data.nasdaq_data_link.api_kind == "tables"
+    assert cfg.data.nasdaq_data_link.table == "WIKI/PRICES"
+    assert cfg.data.nasdaq_data_link.max_requests == 3
+    assert cfg.data.nasdaq_data_link.max_retries == 0
+    assert cfg.data.end == "2018-03-27"
+    assert len(cfg.data.tickers) == 10
+    assert cfg.data.allow_synthetic_fallback is False
+
+
 @pytest.mark.parametrize(
     "nasdaq_config",
     [
