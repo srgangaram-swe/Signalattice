@@ -1,0 +1,35 @@
+{
+  "benchmark": "nasdaq_data_link_cache_replay",
+  "command": ".venv/bin/python scripts/benchmark_nasdaq_cache_replay.py",
+  "config": "configs/nasdaq_wiki_sample.yaml",
+  "credential_available_to_client": false,
+  "hardware": {
+    "architecture": "arm64",
+    "cpu": "Apple M4",
+    "memory_bytes": 17179869184,
+    "operating_system": "macOS 15.5 (24F74)"
+  },
+  "limitations": [
+    "single local process",
+    "warm filesystem cache is not controlled",
+    "one machine and one observed benchmark run",
+    "measures verified local replay, not provider latency"
+  ],
+  "median_rows_per_second": 73281.00697838103,
+  "network_requests": 0,
+  "pandas": "3.0.5",
+  "peak_tracemalloc_bytes": 19000567,
+  "platform": "macOS-15.5-arm64-arm-64bit-Mach-O",
+  "python": "3.13.11",
+  "repetitions": 7,
+  "rows": 13169,
+  "seconds": {
+    "maximum": 0.20782825000060257,
+    "mean": 0.18557578571614744,
+    "median": 0.17970550000609364,
+    "minimum": 0.17790562500886153,
+    "p95": 0.20357672499812907
+  },
+  "snapshot_hash": "c3e99355476ddc7370b9921b8d9495cf0e62ed52f04c83f68ac4ca9ad8bcc96d",
+  "tickers": 10
+}

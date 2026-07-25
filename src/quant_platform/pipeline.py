@@ -33,7 +33,10 @@ from quant_platform.evaluation import (
     readiness_gate,
     warm_inference_benchmark,
 )
+from quant_platform.features.backfill import BackfillOrchestrator, BackfillPartition, BackfillPlan
+from quant_platform.features.integration import build_pipeline_materialization_request
 from quant_platform.features.pipeline import build_features, feature_columns
+from quant_platform.features.store import FeatureStore
 from quant_platform.logging_utils import get_logger
 from quant_platform.models.baseline import baseline_signal
 from quant_platform.models.train import TrainResult, save_model, walk_forward_train
@@ -45,15 +48,11 @@ from quant_platform.utils import (
     ensure_dir,
     git_commit_hash,
     hash_dataframe,
-    hash_dict,
     resolve_path,
     set_global_seed,
 )
 
 logger = get_logger(__name__)
-
-FEATURES_FILENAME = "features.parquet"
-FEATURES_MANIFEST_FILENAME = "features_manifest.json"
 
 
 @dataclass
@@ -69,6 +68,7 @@ class PipelineArtifacts:
     figures: dict[str, Path] = field(default_factory=dict)
     decision_analysis: dict[str, Any] = field(default_factory=dict)
     data_hash: str | None = None
+    feature_materialization_id: str | None = None
 
 
 class Pipeline:
@@ -78,6 +78,7 @@ class Pipeline:
         self.config = config
         self.base_dir = base_dir
         self.art = PipelineArtifacts()
+        self._feature_store: FeatureStore | None = None
         set_global_seed(config.project.seed)
 
     # -- path helpers --------------------------------------------------------
@@ -87,11 +88,29 @@ class Pipeline:
 
     @property
     def features_path(self) -> Path:
-        return self.processed_dir / FEATURES_FILENAME
+        """Return the immutable object path, or the configured store root."""
+        if self.art.feature_materialization_id is None:
+            return self.feature_store.root
+        return self.feature_store.objects_dir / self.art.feature_materialization_id
 
     @property
     def features_manifest_path(self) -> Path:
-        return self.processed_dir / FEATURES_MANIFEST_FILENAME
+        """Return the current verified materialization manifest path."""
+        if self.art.feature_materialization_id is None:
+            raise RuntimeError("no feature materialization has been selected")
+        return self.features_path / "manifest.json"
+
+    @property
+    def feature_store(self) -> FeatureStore:
+        """Return the bounded local store configured for this pipeline."""
+        if self._feature_store is None:
+            store_config = self.config.feature_store
+            self._feature_store = FeatureStore(
+                resolve_path(store_config.root_dir, self.base_dir),
+                max_query_rows=store_config.max_query_rows,
+                max_query_columns=store_config.max_query_columns,
+            )
+        return self._feature_store
 
     @property
     def model_path(self) -> Path:
@@ -131,28 +150,28 @@ class Pipeline:
     def build_features(self, *, force: bool = False) -> pd.DataFrame:
         logger.info("=== Stage: build-features ===")
         panel = self._ensure_panel()
-        data_hash = self.art.data_hash or hash_dataframe(panel)
-        fingerprint = hash_dict(
-            {
-                "data_hash": data_hash,
-                "features": self.config.features.model_dump(mode="json"),
-                "benchmark": self.config.data.benchmark,
-                "price_field": self.config.data.price_field,
-                "forward_horizon": self.config.model.forward_horizon,
-            }
-        )
-        if self.features_path.exists() and self.features_manifest_path.exists() and not force:
+        metadata: dict[str, Any] = {}
+        metadata_path = self.processed_dir / "panel_metadata.json"
+        if metadata_path.exists():
             try:
-                manifest = json.loads(self.features_manifest_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                manifest = {}
-            if manifest.get("fingerprint") == fingerprint:
-                logger.info("Loading fingerprint-matched features from %s", self.features_path)
-                feats = pd.read_parquet(self.features_path)
+                loaded = json.loads(metadata_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    metadata = loaded
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                logger.warning("Ignoring unreadable panel metadata at %s", metadata_path)
+        request = build_pipeline_materialization_request(self.config, panel, metadata)
+        if self.config.feature_store.enabled and not force:
+            existing = self.feature_store.lookup(request)
+            if existing is not None:
+                logger.info(
+                    "Loading verified content-addressed features %s",
+                    existing.object_id,
+                )
+                feats = self.feature_store.read(existing.object_id)
                 feats[DATE_COL] = pd.to_datetime(feats[DATE_COL])
                 self.art.features = feats
+                self.art.feature_materialization_id = existing.object_id
                 return feats
-            logger.info("Cached feature fingerprint is stale; rebuilding")
         feats = build_features(
             panel,
             self.config.features,
@@ -160,25 +179,27 @@ class Pipeline:
             price_field=self.config.data.price_field,
             forward_horizon=self.config.model.forward_horizon,
         )
-        features_tmp = self.features_path.with_suffix(".tmp.parquet")
-        feats.to_parquet(features_tmp, index=False)
-        features_tmp.replace(self.features_path)
-        manifest_tmp = self.features_manifest_path.with_suffix(".tmp.json")
-        manifest_tmp.write_text(
-            json.dumps(
-                {
-                    "fingerprint": fingerprint,
-                    "data_hash": data_hash,
-                    "n_rows": len(feats),
-                    "n_features": len(feature_columns(feats)),
-                },
-                indent=2,
-                sort_keys=True,
-            ),
-            encoding="utf-8",
-        )
-        manifest_tmp.replace(self.features_manifest_path)
-        logger.info("Saved features to %s", self.features_path)
+        if self.config.feature_store.enabled:
+            registered = tuple(feature.name for feature in request.features)
+            produced = tuple(sorted(feature_columns(feats)))
+            if produced != registered:
+                missing = sorted(set(registered).difference(produced))
+                undeclared = sorted(set(produced).difference(registered))
+                raise RuntimeError(
+                    "feature registry/output mismatch: "
+                    f"missing={missing}, undeclared={undeclared}"
+                )
+            manifest = self.feature_store.materialize(request, feats)
+            feats = self.feature_store.read(manifest.object_id)
+            feats[DATE_COL] = pd.to_datetime(feats[DATE_COL])
+            self.art.feature_materialization_id = manifest.object_id
+            logger.info(
+                "Published immutable feature materialization %s (%d rows)",
+                manifest.object_id,
+                manifest.rows,
+            )
+        else:
+            logger.warning("Feature-store persistence is explicitly disabled")
         self.art.features = feats
         return feats
 
@@ -187,6 +208,71 @@ class Pipeline:
             self.build_features()
         assert self.art.features is not None
         return self.art.features
+
+    def backfill_features(self) -> pd.DataFrame:
+        """Materialize feature partitions through the resumable state machine.
+
+        Each partition receives only its declared application interval plus the
+        trailing warm-up rows and forward-label horizon it needs.  Completed
+        checkpoints are verified and reused after interruption.
+        """
+        logger.info("=== Stage: backfill-features ===")
+        panel = self._ensure_panel()
+        metadata: dict[str, Any] = {}
+        metadata_path = self.processed_dir / "panel_metadata.json"
+        if metadata_path.exists():
+            try:
+                loaded = json.loads(metadata_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    metadata = loaded
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                logger.warning("Ignoring unreadable panel metadata at %s", metadata_path)
+        request = build_pipeline_materialization_request(self.config, panel, metadata)
+        store_config = self.config.feature_store
+        plan = BackfillPlan.create(
+            request,
+            max_workers=store_config.max_workers,
+            max_attempts=store_config.max_attempts,
+            max_rows_per_partition=store_config.max_rows_per_partition,
+        )
+        dates = pd.DatetimeIndex(sorted(pd.to_datetime(panel[DATE_COL]).unique()))
+        warmup = max(feature.warmup_bars for feature in request.features)
+        horizon = self.config.model.forward_horizon
+
+        def load_partition(partition: BackfillPartition) -> pd.DataFrame:
+            start_index = int(dates.searchsorted(pd.Timestamp(partition.start), side="left"))
+            end_index = int(dates.searchsorted(pd.Timestamp(partition.end), side="right"))
+            warmup_start = dates[max(0, start_index - warmup)]
+            future_end = dates[min(len(dates) - 1, end_index - 1 + horizon)]
+            subset = panel.loc[
+                (pd.to_datetime(panel[DATE_COL]) >= warmup_start)
+                & (pd.to_datetime(panel[DATE_COL]) <= future_end)
+            ].copy()
+            features = build_features(
+                subset,
+                self.config.features,
+                benchmark=self.config.data.benchmark,
+                price_field=self.config.data.price_field,
+                forward_horizon=horizon,
+            )
+            feature_dates = pd.to_datetime(features[DATE_COL]).dt.date
+            return features.loc[
+                (feature_dates >= partition.start) & (feature_dates <= partition.end)
+            ].copy()
+
+        result = BackfillOrchestrator(self.feature_store).run(plan, load_partition)
+        features = self.feature_store.read(result.object_id)
+        features[DATE_COL] = pd.to_datetime(features[DATE_COL])
+        self.art.features = features
+        self.art.feature_materialization_id = result.object_id
+        logger.info(
+            "Backfill %s published %s (reused=%d, computed=%d)",
+            result.plan_id,
+            result.object_id,
+            result.reused_partitions,
+            result.computed_partitions,
+        )
+        return features
 
     def train(self) -> TrainResult:
         logger.info("=== Stage: train-model ===")
@@ -475,6 +561,8 @@ class Pipeline:
                 tickers=sorted(panel[TICKER_COL].unique().tolist()),
                 features=feature_columns(features),
             )
+            if self.art.feature_materialization_id is not None:
+                ctx.log_tags({"feature_materialization_id": self.art.feature_materialization_id})
             ctx.log_params(self.config.to_dict())
             if self.art.train_result is not None:
                 ctx.log_metrics({f"model_{k}": v for k, v in self.art.train_result.metrics.items()})

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -21,12 +22,24 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from quant_platform.data.bitemporal_records import (
+    CORPORATE_ACTION_COLUMNS,
+    UNIVERSE_COLUMNS,
+    BitemporalRecordError,
+    SignalFoundryBundleView,
+    coerce_corporate_action_records,
+    coerce_universe_records,
+    empty_corporate_action_records,
+    empty_universe_records,
+    visible_revisions,
+)
 from quant_platform.data.schema import DATE_COL, OHLCV_COLUMNS, TICKER_COL
 from quant_platform.data.validation import validate_price_panel
 from quant_platform.utils import ensure_dir, git_commit_hash
 
 CONTRACT_NAME = "signal-foundry-market-data"
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
+SUPPORTED_SCHEMA_VERSIONS = frozenset({"1.0.0", SCHEMA_VERSION})
 MANIFEST_NAME = "manifest.json"
 TEMPORAL_COLUMNS: tuple[str, ...] = (
     "effective_at",
@@ -66,10 +79,53 @@ SEMANTIC_MANIFEST_FIELDS: tuple[str, ...] = (
     "license",
     "source_provenance",
 )
+V1_1_SEMANTIC_MANIFEST_FIELDS: tuple[str, ...] = (
+    *SEMANTIC_MANIFEST_FIELDS,
+    "universe_files",
+    "universe_columns",
+    "universe_rows",
+    "corporate_action_files",
+    "corporate_action_columns",
+    "corporate_action_rows",
+)
 
 
 class SignalFoundryContractError(ValueError):
     """Raised when a bundle cannot be safely published or consumed."""
+
+
+def _validate_source_manifest(source_manifest: Mapping[str, Any]) -> None:
+    if source_manifest.get("contains_api_key") is not False:
+        raise SignalFoundryContractError(
+            "source manifest must explicitly attest contains_api_key=false"
+        )
+    for field in ("request_hash", "snapshot_hash"):
+        value = source_manifest.get(field)
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise SignalFoundryContractError(
+                f"source manifest {field} must be a lowercase SHA-256 digest"
+            )
+    for field in ("provider", "retrieved_at"):
+        value = source_manifest.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise SignalFoundryContractError(f"source manifest has invalid {field}")
+    request = source_manifest.get("request")
+    if not isinstance(request, Mapping) or not isinstance(request.get("table"), str):
+        raise SignalFoundryContractError("source manifest lacks a provider table identity")
+    limits = source_manifest.get("point_in_time_limits")
+    expected_limits = {
+        "historical_revisions_complete",
+        "universe_membership_point_in_time",
+        "corporate_actions_complete",
+    }
+    if not isinstance(limits, Mapping) or set(limits) != expected_limits:
+        raise SignalFoundryContractError(
+            "source manifest must declare all point-in-time limitation flags"
+        )
+    if not all(isinstance(limits[key], bool) for key in expected_limits):
+        raise SignalFoundryContractError("point-in-time limitation flags must be boolean")
+    if not isinstance(source_manifest.get("observations_redistributable", False), bool):
+        raise SignalFoundryContractError("observations_redistributable must be boolean")
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -96,6 +152,20 @@ def _atomic_json(path: Path, value: Any) -> None:
     temporary.replace(path)
 
 
+def _strict_utc_column(frame: pd.DataFrame, column: str, *, nullable: bool) -> None:
+    parsed = pd.to_datetime(frame[column], errors="raise", utc=False)
+    if nullable and parsed.isna().all():
+        frame[column] = pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns, UTC]")
+        return
+    if not isinstance(parsed.dtype, pd.DatetimeTZDtype):
+        raise SignalFoundryContractError(
+            f"contract column {column!r} contains a timezone-ambiguous timestamp"
+        )
+    frame[column] = parsed.dt.tz_convert("UTC")
+    if not nullable and frame[column].isna().any():
+        raise SignalFoundryContractError(f"contract column {column!r} contains a missing timestamp")
+
+
 def _coerce_contract_frame(panel: pd.DataFrame) -> pd.DataFrame:
     missing = sorted(set(CONTRACT_COLUMNS).difference(panel.columns))
     if missing:
@@ -103,15 +173,16 @@ def _coerce_contract_frame(panel: pd.DataFrame) -> pd.DataFrame:
     frame: pd.DataFrame = panel.loc[:, list(CONTRACT_COLUMNS)].copy()
     frame[DATE_COL] = pd.to_datetime(frame[DATE_COL], errors="raise").dt.tz_localize(None)
     for column in TEMPORAL_COLUMNS:
-        frame[column] = pd.to_datetime(frame[column], errors="coerce", utc=True)
-    if frame[["effective_at", "available_at", "observed_at"]].isna().any().any():
-        raise SignalFoundryContractError(
-            "effective_at, available_at, and observed_at must be valid UTC timestamps"
-        )
+        _strict_utc_column(frame, column, nullable=column == "provider_updated_at")
     if (frame["available_at"] < frame["effective_at"]).any():
         raise SignalFoundryContractError("available_at precedes effective_at")
     if (frame["observed_at"] < frame["effective_at"]).any():
         raise SignalFoundryContractError("observed_at precedes effective_at")
+    if (frame["observed_at"] < frame["available_at"]).any():
+        raise SignalFoundryContractError("observed_at precedes available_at")
+    provider_time = frame["provider_updated_at"]
+    if (provider_time.notna() & provider_time.gt(frame["observed_at"])).any():
+        raise SignalFoundryContractError("provider_updated_at follows observed_at")
     if frame.duplicated([DATE_COL, TICKER_COL]).any():
         raise SignalFoundryContractError("contract frame has duplicate (date, ticker) keys")
     numeric = frame.loc[:, OHLCV_COLUMNS].to_numpy(dtype=float)
@@ -148,12 +219,46 @@ def _safe_relative_file(bundle_dir: Path, relative: str) -> Path:
     return resolved
 
 
+def _write_parquet(
+    frame: pd.DataFrame,
+    path: Path,
+) -> None:
+    table = pa.Table.from_pandas(frame, preserve_index=False)
+    pq.write_table(
+        table,
+        path,
+        compression="zstd",
+        compression_level=9,
+        version="2.6",
+        data_page_version="2.0",
+        use_dictionary=True,
+        write_statistics=True,
+    )
+
+
+def _write_auxiliary_record_set(
+    frame: pd.DataFrame,
+    *,
+    staging: Path,
+    family: str,
+) -> list[dict[str, Any]]:
+    if frame.empty:
+        return []
+    relative = f"{family}/part-00000.parquet"
+    path = _safe_relative_file(staging, relative)
+    path.parent.mkdir(parents=True, exist_ok=False)
+    _write_parquet(frame, path)
+    return [{"path": relative, "sha256": _sha256_file(path), "rows": int(len(frame))}]
+
+
 def export_signal_foundry_bundle(
     panel: pd.DataFrame,
     output_root: str | Path,
     *,
     source_manifest: Mapping[str, Any],
     producer_git_sha: str | None = None,
+    universe: pd.DataFrame | None = None,
+    corporate_actions: pd.DataFrame | None = None,
 ) -> Path:
     """Publish a deterministic, content-addressed Signal Foundry bundle.
 
@@ -169,18 +274,19 @@ def export_signal_foundry_bundle(
         is present and identify the source snapshot.
     producer_git_sha:
         Full producer commit. Defaults to the current checkout when available.
+    universe:
+        Optional versioned membership-event records. Empty is honest when the
+        source lacks point-in-time constituent history.
+    corporate_actions:
+        Optional versioned action-event records. Empty is honest when the
+        source lacks complete action history.
 
     Returns
     -------
     pathlib.Path
         The immutable bundle directory.
     """
-    if source_manifest.get("contains_api_key") is not False:
-        raise SignalFoundryContractError(
-            "source manifest must explicitly attest contains_api_key=false"
-        )
-    if not isinstance(source_manifest.get("snapshot_hash"), str):
-        raise SignalFoundryContractError("source manifest lacks snapshot_hash")
+    _validate_source_manifest(source_manifest)
     retrieved_at = source_manifest.get("retrieved_at")
     if not isinstance(retrieved_at, str):
         raise SignalFoundryContractError("source manifest has invalid retrieved_at")
@@ -190,6 +296,11 @@ def export_signal_foundry_bundle(
         raise SignalFoundryContractError("source manifest has invalid retrieved_at") from exc
 
     frame = _coerce_contract_frame(panel)
+    try:
+        universe_frame = coerce_universe_records(universe)
+        corporate_action_frame = coerce_corporate_action_records(corporate_actions)
+    except BitemporalRecordError as exc:
+        raise SignalFoundryContractError(str(exc)) from exc
     root = ensure_dir(output_root)
     staging = root / ".publishing"
     if staging.exists():
@@ -208,17 +319,7 @@ def export_signal_foundry_bundle(
             relative = f"prices/year={year}/part-00000.parquet"
             path = _safe_relative_file(staging, relative)
             path.parent.mkdir(parents=True, exist_ok=False)
-            table = pa.Table.from_pandas(partition, preserve_index=False)
-            pq.write_table(
-                table,
-                path,
-                compression="zstd",
-                compression_level=9,
-                version="2.6",
-                data_page_version="2.0",
-                use_dictionary=True,
-                write_statistics=True,
-            )
+            _write_parquet(partition, path)
             files.append(
                 {
                     "path": relative,
@@ -227,6 +328,16 @@ def export_signal_foundry_bundle(
                     "year": year,
                 }
             )
+        universe_files = _write_auxiliary_record_set(
+            universe_frame,
+            staging=staging,
+            family="universe",
+        )
+        corporate_action_files = _write_auxiliary_record_set(
+            corporate_action_frame,
+            staging=staging,
+            family="corporate_actions",
+        )
 
         source_manifest_hash = _sha256_bytes(_canonical_json(dict(source_manifest)))
         temporal_contract = {
@@ -268,6 +379,12 @@ def export_signal_foundry_bundle(
             "point_in_time_limits": point_in_time_limits,
             "license": license_policy,
             "source_provenance": source_provenance,
+            "universe_files": universe_files,
+            "universe_columns": list(UNIVERSE_COLUMNS),
+            "universe_rows": int(len(universe_frame)),
+            "corporate_action_files": corporate_action_files,
+            "corporate_action_columns": list(CORPORATE_ACTION_COLUMNS),
+            "corporate_action_rows": int(len(corporate_action_frame)),
         }
         bundle_id = _sha256_bytes(_canonical_json(semantic))
         manifest = {
@@ -308,9 +425,10 @@ def read_signal_foundry_manifest(bundle_dir: str | Path) -> dict[str, Any]:
         raise SignalFoundryContractError("bundle manifest must be a JSON object")
     if value.get("contract") != CONTRACT_NAME:
         raise SignalFoundryContractError("unsupported bundle contract name")
-    if value.get("schema_version") != SCHEMA_VERSION:
+    if value.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
         raise SignalFoundryContractError(
-            f"unsupported schema version {value.get('schema_version')!r}; expected {SCHEMA_VERSION}"
+            f"unsupported schema version {value.get('schema_version')!r}; "
+            f"supported={sorted(SUPPORTED_SCHEMA_VERSIONS)}"
         )
     bundle_id = value.get("bundle_id")
     if not isinstance(bundle_id, str) or len(bundle_id) != 64 or root.name != bundle_id:
@@ -320,7 +438,67 @@ def read_signal_foundry_manifest(bundle_dir: str | Path) -> dict[str, Any]:
         raise SignalFoundryContractError("bundle manifest has no data files")
     if value.get("columns") != list(CONTRACT_COLUMNS):
         raise SignalFoundryContractError("bundle manifest declares an unsupported column schema")
+    if value["schema_version"] == SCHEMA_VERSION:
+        if value.get("universe_columns") != list(UNIVERSE_COLUMNS):
+            raise SignalFoundryContractError("bundle declares an unsupported universe schema")
+        if value.get("corporate_action_columns") != list(CORPORATE_ACTION_COLUMNS):
+            raise SignalFoundryContractError(
+                "bundle declares an unsupported corporate-action schema"
+            )
     return value
+
+
+def _read_record_set(
+    root: Path,
+    *,
+    entries: Any,
+    columns: tuple[str, ...],
+    expected_rows: Any,
+    family: str,
+) -> pd.DataFrame:
+    if not isinstance(entries, list):
+        raise SignalFoundryContractError(f"{family} file manifest must be a list")
+    if not isinstance(expected_rows, int) or expected_rows < 0:
+        raise SignalFoundryContractError(f"{family} row count must be a non-negative integer")
+    frames: list[pd.DataFrame] = []
+    seen: set[str] = set()
+    total_rows = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise SignalFoundryContractError(f"{family} file entry must be an object")
+        relative = entry.get("path")
+        expected_hash = entry.get("sha256")
+        rows = entry.get("rows")
+        if (
+            not isinstance(relative, str)
+            or not isinstance(expected_hash, str)
+            or not isinstance(rows, int)
+            or rows < 0
+        ):
+            raise SignalFoundryContractError(f"{family} file entry is incomplete")
+        if relative in seen:
+            raise SignalFoundryContractError(f"duplicate {family} data path: {relative}")
+        seen.add(relative)
+        path = _safe_relative_file(root, relative)
+        if not path.is_file():
+            raise SignalFoundryContractError(f"{family} data file is missing: {relative}")
+        if _sha256_file(path) != expected_hash:
+            raise SignalFoundryContractError(f"{family} data hash mismatch: {relative}")
+        try:
+            frame = pd.read_parquet(path)
+        except (OSError, ValueError, pa.ArrowException) as exc:
+            raise SignalFoundryContractError(f"{family} data is unreadable: {relative}") from exc
+        if list(frame.columns) != list(columns):
+            raise SignalFoundryContractError(f"{family} schema mismatch: {relative}")
+        if len(frame) != rows:
+            raise SignalFoundryContractError(f"{family} row-count mismatch: {relative}")
+        total_rows += len(frame)
+        frames.append(frame)
+    if total_rows != expected_rows:
+        raise SignalFoundryContractError(f"{family} aggregate row-count mismatch")
+    if not frames:
+        return pd.DataFrame(columns=list(columns))
+    return pd.concat(frames, ignore_index=True)
 
 
 def validate_signal_foundry_bundle(bundle_dir: str | Path) -> dict[str, Any]:
@@ -346,7 +524,10 @@ def validate_signal_foundry_bundle(bundle_dir: str | Path) -> dict[str, Any]:
             raise SignalFoundryContractError(f"bundle data file is missing: {relative}")
         if _sha256_file(path) != expected_hash:
             raise SignalFoundryContractError(f"bundle data hash mismatch: {relative}")
-        frame = pd.read_parquet(path)
+        try:
+            frame = pd.read_parquet(path)
+        except (OSError, ValueError, pa.ArrowException) as exc:
+            raise SignalFoundryContractError(f"bundle data is unreadable: {relative}") from exc
         if list(frame.columns) != list(CONTRACT_COLUMNS):
             raise SignalFoundryContractError(f"bundle schema mismatch: {relative}")
         if not isinstance(expected_rows, int) or len(frame) != expected_rows:
@@ -357,8 +538,14 @@ def validate_signal_foundry_bundle(bundle_dir: str | Path) -> dict[str, Any]:
         raise SignalFoundryContractError("bundle aggregate row-count mismatch")
 
     frame = _coerce_contract_frame(pd.concat(frames, ignore_index=True))
+    schema_version = manifest["schema_version"]
+    semantic_fields = (
+        V1_1_SEMANTIC_MANIFEST_FIELDS
+        if schema_version == SCHEMA_VERSION
+        else SEMANTIC_MANIFEST_FIELDS
+    )
     try:
-        semantic = {key: manifest[key] for key in SEMANTIC_MANIFEST_FIELDS}
+        semantic = {key: manifest[key] for key in semantic_fields}
     except KeyError as exc:
         raise SignalFoundryContractError(
             f"bundle manifest is missing identity field: {exc.args[0]}"
@@ -371,6 +558,34 @@ def validate_signal_foundry_bundle(bundle_dir: str | Path) -> dict[str, Any]:
         raise SignalFoundryContractError("bundle maximum date mismatch")
     if sorted(frame[TICKER_COL].unique().tolist()) != manifest["tickers"]:
         raise SignalFoundryContractError("bundle ticker universe mismatch")
+    declared_paths = set(seen_paths)
+    if schema_version == SCHEMA_VERSION:
+        universe = _read_record_set(
+            root,
+            entries=manifest["universe_files"],
+            columns=UNIVERSE_COLUMNS,
+            expected_rows=manifest["universe_rows"],
+            family="universe",
+        )
+        corporate_actions = _read_record_set(
+            root,
+            entries=manifest["corporate_action_files"],
+            columns=CORPORATE_ACTION_COLUMNS,
+            expected_rows=manifest["corporate_action_rows"],
+            family="corporate_actions",
+        )
+        try:
+            coerce_universe_records(universe)
+            coerce_corporate_action_records(corporate_actions)
+        except BitemporalRecordError as exc:
+            raise SignalFoundryContractError(str(exc)) from exc
+        declared_paths.update(entry["path"] for entry in manifest["universe_files"])
+        declared_paths.update(entry["path"] for entry in manifest["corporate_action_files"])
+    actual_paths = {
+        path.relative_to(root).as_posix() for path in root.rglob("*.parquet") if path.is_file()
+    }
+    if actual_paths != declared_paths:
+        raise SignalFoundryContractError("bundle contains missing or undeclared parquet files")
     return manifest
 
 
@@ -379,18 +594,67 @@ def load_signal_foundry_bundle(
     *,
     as_of: str | datetime | pd.Timestamp | None = None,
 ) -> pd.DataFrame:
-    """Load a verified bundle, optionally applying the point-in-time rule."""
+    """Load verified market observations, optionally applying the as-of rule."""
+    return load_signal_foundry_bundle_view(bundle_dir, as_of=as_of).prices
+
+
+def load_signal_foundry_bundle_view(
+    bundle_dir: str | Path,
+    *,
+    as_of: str | datetime | pd.Timestamp | None = None,
+) -> SignalFoundryBundleView:
+    """Load all verified record families visible at a decision timestamp.
+
+    Validation always completes before any record is returned. When ``as_of``
+    is supplied, a record is visible only when both its economic effective time
+    and its information-availability time are no later than the decision time.
+    For versioned universe and corporate-action identities, only the latest
+    visible revision is returned.
+    """
     root = Path(bundle_dir)
     manifest = validate_signal_foundry_bundle(root)
     frames = [
         pd.read_parquet(_safe_relative_file(root, entry["path"])) for entry in manifest["files"]
     ]
-    frame = _coerce_contract_frame(pd.concat(frames, ignore_index=True))
-    if as_of is not None:
-        timestamp = pd.Timestamp(as_of)
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.tz_localize(UTC)
-        else:
-            timestamp = timestamp.tz_convert(UTC)
-        frame = frame.loc[frame["available_at"].le(timestamp)]
-    return frame.sort_values([DATE_COL, TICKER_COL], kind="stable").reset_index(drop=True)
+    prices = _coerce_contract_frame(pd.concat(frames, ignore_index=True))
+    universe = empty_universe_records()
+    corporate_actions = empty_corporate_action_records()
+    if manifest["schema_version"] == SCHEMA_VERSION:
+        universe = coerce_universe_records(
+            _read_record_set(
+                root,
+                entries=manifest["universe_files"],
+                columns=UNIVERSE_COLUMNS,
+                expected_rows=manifest["universe_rows"],
+                family="universe",
+            )
+        )
+        corporate_actions = coerce_corporate_action_records(
+            _read_record_set(
+                root,
+                entries=manifest["corporate_action_files"],
+                columns=CORPORATE_ACTION_COLUMNS,
+                expected_rows=manifest["corporate_action_rows"],
+                family="corporate_actions",
+            )
+        )
+    if as_of is None:
+        return SignalFoundryBundleView(prices, universe, corporate_actions)
+    timestamp = pd.Timestamp(as_of)
+    if timestamp.tzinfo is None:
+        raise SignalFoundryContractError("as_of must contain an explicit timezone")
+    timestamp = timestamp.tz_convert(UTC)
+    prices = prices.loc[
+        prices["effective_at"].le(timestamp) & prices["available_at"].le(timestamp)
+    ].reset_index(drop=True)
+    universe = visible_revisions(
+        universe,
+        as_of=timestamp,
+        identity_column="membership_id",
+    )
+    corporate_actions = visible_revisions(
+        corporate_actions,
+        as_of=timestamp,
+        identity_column="action_id",
+    )
+    return SignalFoundryBundleView(prices, universe, corporate_actions)
