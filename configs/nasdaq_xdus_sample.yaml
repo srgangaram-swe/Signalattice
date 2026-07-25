@@ -1,0 +1,42 @@
+# Entitlement-probe profile for the historically documented XDUS sample.
+#
+# XDUS contains Düsseldorf Stock Exchange history and is suitable for
+# exercising the ingestion/data-contract boundary. It is not representative
+# evidence for a U.S. equity strategy or a substitute for point-in-time
+# fundamentals, universe membership, or current production market data.
+# Availability is account/provider dependent; a 403 must fail closed.
+
+project:
+  name: signal_foundry_xdus_engineering_sample
+  seed: 42
+  description: "Bounded XDUS entitlement probe for data-platform validation."
+
+data:
+  source: nasdaq_data_link
+  allow_synthetic_fallback: false
+  tickers: [BMW, BSX, SAP, SIE, TEG]
+  benchmark: BMW
+  start: "2016-01-01"
+  end: "2018-11-30"
+  raw_dir: data/raw/xdus-sample
+  processed_dir: data/processed/xdus-sample
+  price_field: adj_close
+  min_observations: 252
+  nasdaq_data_link:
+    api_kind: time_series
+    table: XDUS
+    adjustment: adjusted
+    currency: EUR
+    exchange_calendar: XDUS
+    market_close_utc_hour: 17
+    cache_mode: prefer_cache
+    cache_dir: data/vendor/nasdaq-data-link-xdus
+    requests_per_minute: 10
+    max_requests: 5
+    timeout_seconds: 30
+    max_retries: 0
+    retry_backoff_seconds: 1
+    availability_lag_hours: 12
+
+tracking:
+  backend: none
