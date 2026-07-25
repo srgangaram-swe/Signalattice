@@ -8,8 +8,11 @@ project:
 data:
   source: nasdaq_data_link
   allow_synthetic_fallback: false
-  tickers: [SPY]
-  benchmark: SPY
+  # SHARADAR/SEP is the equity-price table. SPY and other exchange-traded
+  # funds belong to a separate provider table and legitimately return no SEP
+  # rows, so the entitlement smoke uses a liquid common stock.
+  tickers: [AAPL]
+  benchmark: AAPL
   start: "2024-01-02"
   end: "2024-01-08"
   raw_dir: data/raw/smoke
