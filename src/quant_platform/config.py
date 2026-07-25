@@ -204,6 +204,34 @@ class FeatureConfig(_Base):
     dropna: bool = True
 
 
+class FeatureStoreConfig(_Base):
+    """Local immutable feature-store and quality policy."""
+
+    enabled: bool = True
+    root_dir: str = "data/feature-store"
+    partition_by: Literal["year", "month"] = "year"
+    max_query_rows: int = Field(default=5_000_000, ge=1, le=100_000_000)
+    max_query_columns: int = Field(default=1_000, ge=1, le=10_000)
+    max_workers: int = Field(default=2, ge=1, le=32)
+    max_attempts: int = Field(default=2, ge=1, le=10)
+    max_rows_per_partition: int = Field(default=5_000_000, ge=1, le=100_000_000)
+    max_missing_fraction: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_business_day_gap: int = Field(default=5, ge=1, le=366)
+    max_staleness_days: int = Field(default=7, ge=0, le=3_650)
+    min_drift_samples: int = Field(default=100, ge=20, le=10_000_000)
+    max_ks_statistic: float = Field(default=0.35, gt=0.0, le=1.0)
+    max_psi: float = Field(default=0.25, gt=0.0, le=100.0)
+    psi_bins: int = Field(default=10, ge=4, le=100)
+
+    @field_validator("root_dir")
+    @classmethod
+    def _safe_root_dir(cls, value: str) -> str:
+        path = Path(value)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError("`feature_store.root_dir` must be a safe relative path")
+        return value
+
+
 class CVConfig(_Base):
     """Time-series cross-validation configuration."""
 
@@ -408,6 +436,7 @@ class AppConfig(_Base):
     project: ProjectConfig = Field(default_factory=ProjectConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     features: FeatureConfig = Field(default_factory=FeatureConfig)
+    feature_store: FeatureStoreConfig = Field(default_factory=FeatureStoreConfig)
     model: ModelConfig = Field(default_factory=ModelConfig)
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)

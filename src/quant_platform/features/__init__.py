@@ -6,6 +6,7 @@ Public API:
   feature matrix (per-ticker technical features + optional cross-sectional
   features + forward-looking targets), free of lookahead bias.
 - individual indicator functions in :mod:`quant_platform.features.technical`.
+- immutable registry, quality, feature-store, and resumable backfill contracts.
 """
 
 from __future__ import annotations
@@ -15,5 +16,20 @@ from quant_platform.features.pipeline import (
     build_features,
     feature_columns,
 )
+from quant_platform.features.registry import FeatureRegistry, FeatureSpec
+from quant_platform.features.store import (
+    FeatureMaterializationRequest,
+    FeatureOutputContract,
+    FeatureStore,
+)
 
-__all__ = ["build_features", "feature_columns", "FEATURE_PREFIX"]
+__all__ = [
+    "FEATURE_PREFIX",
+    "FeatureMaterializationRequest",
+    "FeatureOutputContract",
+    "FeatureRegistry",
+    "FeatureSpec",
+    "FeatureStore",
+    "build_features",
+    "feature_columns",
+]
