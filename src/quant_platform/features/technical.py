@@ -172,3 +172,67 @@ def rolling_max_drawdown(price: pd.Series, window: int = 252) -> pd.Series:
         return float(np.min(x / peak - 1.0))
 
     return price.rolling(window, min_periods=max(2, window // 2)).apply(_mdd, raw=True)
+
+
+def rolling_vwap(typical_price: pd.Series, volume: pd.Series, window: int = 21) -> pd.Series:
+    """Trailing volume-weighted average price over ``window`` bars.
+
+    ``VWAP_t = sum(typical_price * volume) / sum(volume)`` over the trailing
+    window. ``min_periods == window`` so the estimate is undefined (``NaN``)
+    until a full window of history is available. A window whose traded volume
+    sums to zero yields ``NaN`` rather than a divide-by-zero.
+    """
+    weighted = (typical_price * volume).rolling(window, min_periods=window).sum()
+    traded = volume.rolling(window, min_periods=window).sum()
+    return weighted / traded.replace(0.0, np.nan)
+
+
+def vwap_deviation(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    volume: pd.Series,
+    window: int = 21,
+) -> pd.Series:
+    """Fractional deviation of ``close`` from its trailing VWAP.
+
+    Uses the classic typical price ``(high + low + close) / 3`` as the per-bar
+    price proxy. The result ``close / VWAP - 1`` is scale-free: positive means
+    the close trades above the recent volume-weighted level (a mean-reversion
+    short candidate), negative below. Strictly causal — the VWAP at bar *t* uses
+    only bars up to and including *t*.
+    """
+    typical_price = (high + low + close) / 3.0
+    vwap = rolling_vwap(typical_price, volume, window)
+    return close / vwap - 1.0
+
+
+def rolling_regression_residual(price: pd.Series, window: int = 63) -> pd.Series:
+    """Causal detrending residual from a rolling log-linear regression.
+
+    Within each trailing window of length ``window`` an ordinary-least-squares
+    line is fit to ``log(price)`` against an integer time index, and the residual
+    of the most recent observation (actual minus fitted log level) is returned.
+    Positive values mean price sits above its recent log-linear trend; negative
+    below — a scale-free mean-reversion signal in approximate fractional units.
+
+    The residual for the last window point is a fixed linear functional of the
+    window, so the whole series is computed with one strided matrix product
+    rather than a per-window Python loop. ``NaN`` for the first ``window - 1``
+    bars and for any window containing a missing value.
+    """
+    if window < 3:
+        raise ValueError("rolling_regression_residual requires window >= 3")
+    log_price = np.log(price.to_numpy(dtype=float))
+    n = log_price.shape[0]
+    out = np.full(n, np.nan, dtype=float)
+    if n >= window:
+        design = np.column_stack((np.ones(window), np.arange(window, dtype=float)))
+        gram_inv = np.linalg.inv(design.T @ design)
+        hat_last = design @ (gram_inv @ design[-1])  # fitted-value weights for last point
+        residual_weights = np.zeros(window, dtype=float)
+        residual_weights[-1] = 1.0
+        residual_weights = residual_weights - hat_last
+        windows = np.lib.stride_tricks.sliding_window_view(log_price, window)
+        out[window - 1 :] = windows @ residual_weights
+    return pd.Series(out, index=price.index, name=price.name)
