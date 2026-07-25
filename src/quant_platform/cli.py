@@ -141,6 +141,36 @@ def build_features_cmd(
     )
 
 
+@app.command("backfill-features")
+def backfill_features_cmd(
+    config: str = ConfigOpt,
+    log_level: str | None = LogLevelOpt,
+) -> None:
+    """Build or resume bounded date partitions and publish one verified object."""
+    pipe = _load(config, log_level)
+    features = pipe.backfill_features()
+    typer.echo(f"Backfilled {len(features):,} rows → " f"{pipe.art.feature_materialization_id}")
+
+
+@app.command("validate-feature-materialization")
+def validate_feature_materialization_cmd(
+    object_id: str = typer.Argument(..., help="Full feature materialization SHA-256."),
+    store_root: str = typer.Option(
+        "data/feature-store",
+        "--store-root",
+        help="Local ignored feature-store root.",
+    ),
+) -> None:
+    """Verify a feature object and every declared Parquet partition."""
+    from quant_platform.features.store import FeatureStore
+
+    manifest = FeatureStore(store_root).validate(object_id)
+    typer.echo(
+        f"Verified {manifest.object_id} "
+        f"({manifest.rows:,} rows, {len(manifest.partitions)} partitions)"
+    )
+
+
 @app.command("train-model")
 def train_model(config: str = ConfigOpt, log_level: str | None = LogLevelOpt) -> None:
     """Train the model with walk-forward CV and report out-of-sample metrics."""

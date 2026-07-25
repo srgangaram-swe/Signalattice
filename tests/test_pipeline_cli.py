@@ -88,9 +88,39 @@ def test_feature_cache_is_keyed_by_feature_contract(tmp_path, small_config):
     second = pipe.build_features()
     second_manifest = json.loads(pipe.features_manifest_path.read_text(encoding="utf-8"))
 
-    assert first_manifest["fingerprint"] != second_manifest["fingerprint"]
+    assert first_manifest["request_id"] != second_manifest["request_id"]
+    assert first_manifest["object_id"] != second_manifest["object_id"]
     assert "f_rsi_14" in first
     assert "f_rsi_10" in second
+
+
+def test_resumable_backfill_matches_full_materialization_and_cli_validates(tmp_path, small_config):
+    small_config.data.raw_dir = str(tmp_path / "data/raw")
+    small_config.data.processed_dir = str(tmp_path / "data/processed")
+    small_config.feature_store.root_dir = "data/feature-store"
+    small_config.feature_store.max_workers = 2
+    pipe = Pipeline(small_config, base_dir=str(tmp_path))
+
+    backfilled = pipe.backfill_features()
+    object_id = pipe.art.feature_materialization_id
+    assert object_id is not None
+
+    pipe.art.features = None
+    rebuilt = pipe.build_features(force=True)
+    assert pipe.art.feature_materialization_id == object_id
+    pd.testing.assert_frame_equal(backfilled, rebuilt)
+
+    validated = runner.invoke(
+        app,
+        [
+            "validate-feature-materialization",
+            object_id,
+            "--store-root",
+            str(tmp_path / "data/feature-store"),
+        ],
+    )
+    assert validated.exit_code == 0, validated.stdout
+    assert "Verified" in validated.stdout
 
 
 def test_cli_version():
