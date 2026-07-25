@@ -54,14 +54,19 @@ class SyntheticConfig(_Base):
 
 
 class NasdaqDataLinkConfig(_Base):
-    """Bounded Nasdaq Data Link table-API configuration.
+    """Bounded Nasdaq Data Link table or time-series API configuration.
 
     The API credential is deliberately absent. Runtime code resolves only the
     ``NASDAQ_DATA_LINK_API_KEY`` environment variable so serialized
     configurations and run manifests cannot contain the secret.
     """
 
+    api_kind: Literal["tables", "time_series"] = "tables"
     table: str = "SHARADAR/SEP"
+    adjustment: Literal["adjusted", "unadjusted"] = "adjusted"
+    currency: str = "USD"
+    exchange_calendar: str = "XNYS"
+    market_close_utc_hour: int = Field(default=21, ge=0, le=23)
     cache_mode: Literal["prefer_cache", "network", "cache_only"] = "prefer_cache"
     cache_dir: str = "data/vendor/nasdaq-data-link"
     requests_per_minute: int = Field(default=30, ge=1, le=300)
@@ -77,9 +82,42 @@ class NasdaqDataLinkConfig(_Base):
     def _validate_table(cls, value: str) -> str:
         normalized = value.strip().upper()
         parts = normalized.split("/")
-        if len(parts) != 2 or not all(part.replace("_", "").isalnum() for part in parts):
-            raise ValueError("`data.nasdaq_data_link.table` must be DATABASE/TABLE")
+        if not parts or not all(part.replace("_", "").isalnum() for part in parts):
+            raise ValueError("`data.nasdaq_data_link.table` contains an invalid provider code")
         return normalized
+
+    @field_validator("currency")
+    @classmethod
+    def _validate_currency(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if len(normalized) != 3 or not normalized.isalpha():
+            raise ValueError("`data.nasdaq_data_link.currency` must be a three-letter code")
+        return normalized
+
+    @field_validator("exchange_calendar")
+    @classmethod
+    def _validate_exchange_calendar(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if len(normalized) != 4 or not normalized.isalnum():
+            raise ValueError(
+                "`data.nasdaq_data_link.exchange_calendar` must be a four-character code"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_api_product_code(self) -> NasdaqDataLinkConfig:
+        parts = self.table.split("/")
+        expected_parts = 2 if self.api_kind == "tables" else 1
+        if len(parts) != expected_parts:
+            expected = "DATABASE/TABLE" if self.api_kind == "tables" else "DATABASE"
+            raise ValueError(
+                f"`data.nasdaq_data_link.table` must be {expected} when api_kind={self.api_kind!r}"
+            )
+        if self.api_kind == "tables" and self.adjustment != "adjusted":
+            raise ValueError(
+                "`data.nasdaq_data_link.adjustment` is only configurable for time_series"
+            )
+        return self
 
     @field_validator("cache_dir")
     @classmethod
