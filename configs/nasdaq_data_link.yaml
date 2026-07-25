@@ -12,8 +12,11 @@ project:
 data:
   source: nasdaq_data_link
   allow_synthetic_fallback: false
-  tickers: [SPY, QQQ, AAPL, MSFT, NVDA, JPM, TLT]
-  benchmark: SPY
+  # Keep this request inside the single configured SHARADAR/SEP equity table.
+  # ETF/fund prices (for example SPY, QQQ, and TLT) require a separately
+  # versioned provider-table request and must not be mixed into this contract.
+  tickers: [AAPL, MSFT, NVDA, JPM, XOM]
+  benchmark: AAPL
   start: "2015-01-01"
   end: "2026-06-30"
   raw_dir: data/raw
