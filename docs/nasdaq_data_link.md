@@ -33,8 +33,11 @@ signalattice ingest-data --config configs/nasdaq_smoke.yaml --force
 unset NASDAQ_DATA_LINK_API_KEY
 ```
 
-The smoke profile requests one ticker over five market dates, permits at most two HTTP
-requests, retries at most once, and stores all results under ignored local directories.
+The smoke profile requests one liquid common-stock ticker over five market dates,
+permits at most two HTTP requests, retries at most once, and stores all results under
+ignored local directories. The configured `SHARADAR/SEP` table is an equity-price
+table; ETF and fund symbols such as SPY belong to a separate provider table and are
+not valid SEP entitlement probes.
 Run it only after the offline suite passes. To remove the Keychain item:
 
 ```bash
@@ -77,6 +80,12 @@ The initial adapter targets daily OHLCV table semantics compatible with
 `closeadj` as `adj_close` when present. It rejects missing/non-finite values, non-positive
 prices, negative volume, invalid OHLC bounds, duplicate keys, malformed pages, and schema
 changes between pages.
+
+One ingestion configuration addresses one provider table. A research universe must
+therefore contain instruments represented by that table. Combining equity, ETF/fund,
+fundamental, or corporate-action tables requires separate immutable acquisitions and a
+versioned point-in-time join; the current profile deliberately does not guess or silently
+union those semantics.
 
 Each observation records:
 
