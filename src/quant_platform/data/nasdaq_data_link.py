@@ -1,4 +1,4 @@
-"""Bounded, auditable Nasdaq Data Link table ingestion.
+"""Bounded, auditable Nasdaq Data Link table and time-series ingestion.
 
 The adapter deliberately keeps network mechanics outside the research pipeline:
 
@@ -10,8 +10,10 @@ The adapter deliberately keeps network mechanics outside the research pipeline:
 * transport, clock, sleep, randomness, and secret resolution are injectable so
   the complete failure surface can be tested without a network or credential.
 
-The current canonical mapping targets daily OHLCV tables with the SHARADAR/SEP
-column vocabulary. Other tables fail closed when required columns are absent.
+The canonical mapping targets daily OHLCV Tables API products with the
+SHARADAR/SEP vocabulary and daily Time-Series API products with the standard
+Date/Open/High/Low/Close/Volume vocabulary. Other products fail closed when
+required columns are absent.
 """
 
 from __future__ import annotations
@@ -40,7 +42,9 @@ from quant_platform.data.sources import DataSourceError
 from quant_platform.utils import ensure_dir, resolve_path
 
 API_KEY_ENV = "NASDAQ_DATA_LINK_API_KEY"
-API_ROOT = "https://data.nasdaq.com/api/v3/datatables"
+TABLES_API_ROOT = "https://data.nasdaq.com/api/v3/datatables"
+TIME_SERIES_API_ROOT = "https://data.nasdaq.com/api/v3/datasets"
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 TERMINAL_AUTH_STATUS = frozenset({401, 403})
 
@@ -62,7 +66,23 @@ class HttpTransport(Protocol):
 
 
 class UrllibTransport:
-    """Standard-library HTTPS transport with sanitized error handling."""
+    """Standard-library HTTPS transport with bounded, sanitized responses."""
+
+    def __init__(self, *, max_response_bytes: int = MAX_RESPONSE_BYTES) -> None:
+        if max_response_bytes < 1:
+            raise ValueError("max_response_bytes must be positive")
+        self.max_response_bytes = max_response_bytes
+
+    def _read_bounded(self, stream: Any) -> bytes:
+        body = stream.read(self.max_response_bytes + 1)
+        if not isinstance(body, bytes):
+            raise DataSourceError("Nasdaq Data Link transport returned a non-bytes response")
+        if len(body) > self.max_response_bytes:
+            raise DataSourceError(
+                "Nasdaq Data Link response exceeded the configured transport safety bound "
+                f"({self.max_response_bytes} bytes)"
+            )
+        return body
 
     def get(self, url: str, *, timeout: float) -> HttpResponse:
         request = urllib.request.Request(
@@ -78,14 +98,14 @@ class UrllibTransport:
                 return HttpResponse(
                     status=int(response.status),
                     headers={key.lower(): value for key, value in response.headers.items()},
-                    body=response.read(),
+                    body=self._read_bounded(response),
                 )
         except urllib.error.HTTPError as exc:
             # Do not stringify HTTPError: its URL contains the API key.
             return HttpResponse(
                 status=int(exc.code),
                 headers={key.lower(): value for key, value in exc.headers.items()},
-                body=exc.read(),
+                body=self._read_bounded(exc),
             )
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise DataSourceError(
@@ -170,7 +190,7 @@ def _safe_error_message(response: HttpResponse, *, api_key: str) -> str:
 
 
 class NasdaqDataLinkClient:
-    """Fetch and cache one configured Nasdaq Data Link table request."""
+    """Fetch and cache one configured Nasdaq Data Link product request."""
 
     def __init__(
         self,
@@ -207,7 +227,12 @@ class NasdaqDataLinkClient:
         """Return a verified cached or freshly downloaded canonical panel."""
         request = {
             "provider": "nasdaq_data_link",
+            "api_kind": self.config.api_kind,
             "table": self.config.table,
+            "adjustment": self.config.adjustment,
+            "currency": self.config.currency,
+            "exchange_calendar": self.config.exchange_calendar,
+            "market_close_utc_hour": self.config.market_close_utc_hour,
             "tickers": sorted(set(tickers)),
             "start": start,
             "end": end,
@@ -266,35 +291,61 @@ class NasdaqDataLinkClient:
         staging: Path,
         api_key: str,
     ) -> FetchResult:
-        cursor: str | None = None
         page_number = 0
         page_records: list[dict[str, Any]] = []
         page_hashes: list[str] = []
         columns: list[str] | None = None
+        provider_metadata: list[dict[str, Any]] = []
 
-        while True:
-            page_path = staging / f"page-{page_number:05d}.json"
-            if page_path.exists():
-                payload = self._read_page(page_path)
-            else:
-                payload = self._request_page(
-                    request=request,
-                    cursor=cursor,
-                    api_key=api_key,
-                )
-                _atomic_json(page_path, payload)
+        if self.config.api_kind == "tables":
+            cursor: str | None = None
+            while True:
+                page_path = staging / f"page-{page_number:05d}.json"
+                if page_path.exists():
+                    payload = self._read_page(page_path)
+                else:
+                    payload = self._request_table_page(
+                        request=request,
+                        cursor=cursor,
+                        api_key=api_key,
+                    )
+                    _atomic_json(page_path, payload)
 
-            page_columns, rows, next_cursor = self._parse_page(payload)
-            if columns is None:
-                columns = page_columns
-            elif columns != page_columns:
-                raise DataSourceError("Nasdaq Data Link schema changed between response pages")
-            page_records.extend(dict(zip(page_columns, row, strict=True)) for row in rows)
-            page_hashes.append(_sha256_file(page_path))
-            page_number += 1
-            if next_cursor is None:
-                break
-            cursor = next_cursor
+                page_columns, rows, next_cursor = self._parse_table_page(payload)
+                if columns is None:
+                    columns = page_columns
+                elif columns != page_columns:
+                    raise DataSourceError("Nasdaq Data Link schema changed between response pages")
+                page_records.extend(dict(zip(page_columns, row, strict=True)) for row in rows)
+                page_hashes.append(_sha256_file(page_path))
+                page_number += 1
+                if next_cursor is None:
+                    break
+                cursor = next_cursor
+        else:
+            for ticker in request["tickers"]:
+                page_path = staging / f"page-{page_number:05d}.json"
+                if page_path.exists():
+                    payload = self._read_page(page_path)
+                else:
+                    payload = self._request_time_series(
+                        request=request,
+                        ticker=ticker,
+                        api_key=api_key,
+                    )
+                    _atomic_json(page_path, payload)
+                page_columns, rows, metadata = self._parse_time_series(payload)
+                self._validate_time_series_identity(metadata, ticker=ticker)
+                if columns is None:
+                    columns = page_columns
+                elif columns != page_columns:
+                    raise DataSourceError(
+                        "Nasdaq Data Link schema changed between time-series responses"
+                    )
+                page_records.extend(dict(zip(page_columns, row, strict=True)) for row in rows)
+                provider_metadata.append(metadata)
+                page_hashes.append(_sha256_file(page_path))
+                page_number += 1
 
         retrieved_at = self.now().astimezone(UTC).isoformat().replace("+00:00", "Z")
         snapshot_hash = _sha256_bytes(_canonical_json(page_hashes))
@@ -320,10 +371,12 @@ class NasdaqDataLinkClient:
                 page_records,
                 retrieved_at=str(manifest.get("retrieved_at")),
             )
+            self._validate_panel_scope(panel, request=request)
             return FetchResult(panel=panel, manifest=manifest, snapshot_dir=snapshot_dir)
         staging.replace(snapshot_dir)
 
         panel = self._normalise(page_records, retrieved_at=retrieved_at)
+        self._validate_panel_scope(panel, request=request)
         manifest = self._manifest(
             request=request,
             request_hash=request_hash,
@@ -331,6 +384,7 @@ class NasdaqDataLinkClient:
             retrieved_at=retrieved_at,
             panel=panel,
             page_hashes=page_hashes,
+            provider_metadata=provider_metadata,
         )
         _atomic_json(snapshot_dir / "source_manifest.json", manifest)
         _atomic_json(
@@ -343,7 +397,7 @@ class NasdaqDataLinkClient:
         )
         return FetchResult(panel=panel, manifest=manifest, snapshot_dir=snapshot_dir)
 
-    def _request_page(
+    def _request_table_page(
         self,
         *,
         request: dict[str, Any],
@@ -363,8 +417,35 @@ class NasdaqDataLinkClient:
         encoded_table = "/".join(
             urllib.parse.quote(part, safe="") for part in self.config.table.split("/")
         )
-        url = f"{API_ROOT}/{encoded_table}.json?{urllib.parse.urlencode(params)}"
+        url = f"{TABLES_API_ROOT}/{encoded_table}.json?{urllib.parse.urlencode(params)}"
+        return self._request_json(url=url, api_key=api_key)
 
+    def _request_time_series(
+        self,
+        *,
+        request: dict[str, Any],
+        ticker: str,
+        api_key: str,
+    ) -> dict[str, Any]:
+        suffix = "" if self.config.adjustment == "adjusted" else "_UADJ"
+        dataset_code = f"{ticker}{suffix}"
+        encoded_database = urllib.parse.quote(self.config.table, safe="")
+        encoded_dataset = urllib.parse.quote(dataset_code, safe="")
+        params: dict[str, str] = {
+            "api_key": api_key,
+            "start_date": request["start"],
+            "order": "asc",
+        }
+        if request["end"] is not None:
+            params["end_date"] = request["end"]
+        url = (
+            f"{TIME_SERIES_API_ROOT}/{encoded_database}/{encoded_dataset}.json?"
+            f"{urllib.parse.urlencode(params)}"
+        )
+        return self._request_json(url=url, api_key=api_key)
+
+    def _request_json(self, *, url: str, api_key: str) -> dict[str, Any]:
+        """Perform one redacted, budgeted JSON request with bounded retries."""
         for retry in range(self.config.max_retries + 1):
             self.budget.before_request()
             response = self.transport.get(url, timeout=self.config.timeout_seconds)
@@ -413,7 +494,9 @@ class NasdaqDataLinkClient:
         return value
 
     @staticmethod
-    def _parse_page(payload: dict[str, Any]) -> tuple[list[str], list[list[Any]], str | None]:
+    def _parse_table_page(
+        payload: dict[str, Any],
+    ) -> tuple[list[str], list[list[Any]], str | None]:
         datatable = payload.get("datatable")
         meta = payload.get("meta", {})
         if not isinstance(datatable, dict) or not isinstance(meta, dict):
@@ -437,6 +520,73 @@ class NasdaqDataLinkClient:
             raise DataSourceError("Nasdaq Data Link returned an invalid pagination cursor")
         return columns, rows, cursor
 
+    @staticmethod
+    def _parse_time_series(
+        payload: dict[str, Any],
+    ) -> tuple[list[str], list[list[Any]], dict[str, Any]]:
+        dataset = payload.get("dataset")
+        if not isinstance(dataset, dict):
+            raise DataSourceError("Nasdaq Data Link payload lacks a dataset object")
+        raw_columns = dataset.get("column_names")
+        rows = dataset.get("data")
+        database_code = dataset.get("database_code")
+        dataset_code = dataset.get("dataset_code")
+        if (
+            not isinstance(raw_columns, list)
+            or not isinstance(rows, list)
+            or not isinstance(database_code, str)
+            or not isinstance(dataset_code, str)
+        ):
+            raise DataSourceError("Nasdaq Data Link time-series metadata is malformed")
+        columns: list[str] = []
+        for column in raw_columns:
+            if not isinstance(column, str):
+                raise DataSourceError(
+                    "Nasdaq Data Link time-series contains malformed column metadata"
+                )
+            normalized = column.strip().lower().replace(" ", "_")
+            if not normalized or not normalized.replace("_", "").isalnum():
+                raise DataSourceError(
+                    "Nasdaq Data Link time-series contains an invalid column name"
+                )
+            columns.append(normalized)
+        if len(columns) != len(set(columns)):
+            raise DataSourceError("Nasdaq Data Link time-series contains duplicate columns")
+        ticker = dataset_code.removesuffix("_UADJ").upper()
+        source_code = f"{database_code.upper()}/{dataset_code.upper()}"
+        refreshed_at = dataset.get("refreshed_at")
+        enriched_columns = [*columns, TICKER_COL, "_source_code", "_provider_updated_at"]
+        enriched_rows: list[list[Any]] = []
+        for row in rows:
+            if not isinstance(row, list) or len(row) != len(columns):
+                raise DataSourceError("Nasdaq Data Link time-series contains a malformed row")
+            enriched_rows.append([*row, ticker, source_code, refreshed_at])
+        metadata = {
+            "database_code": database_code.upper(),
+            "dataset_code": dataset_code.upper(),
+            "frequency": dataset.get("frequency"),
+            "oldest_available_date": dataset.get("oldest_available_date"),
+            "newest_available_date": dataset.get("newest_available_date"),
+            "refreshed_at": refreshed_at,
+            "premium": dataset.get("premium"),
+        }
+        return enriched_columns, enriched_rows, metadata
+
+    def _validate_time_series_identity(
+        self,
+        metadata: Mapping[str, Any],
+        *,
+        ticker: str,
+    ) -> None:
+        """Reject a valid-looking response for a different provider series."""
+        suffix = "" if self.config.adjustment == "adjusted" else "_UADJ"
+        expected_dataset = f"{ticker}{suffix}".upper()
+        if (
+            metadata.get("database_code") != self.config.table
+            or metadata.get("dataset_code") != expected_dataset
+        ):
+            raise DataSourceError("Nasdaq Data Link time-series response identity mismatch")
+
     def _normalise(self, records: list[dict[str, Any]], *, retrieved_at: str) -> pd.DataFrame:
         if not records:
             raise DataSourceError("Nasdaq Data Link returned no rows")
@@ -446,7 +596,8 @@ class NasdaqDataLinkClient:
         if missing:
             raise DataSourceError(f"Nasdaq Data Link table is missing required columns: {missing}")
         adjusted = "closeadj" if "closeadj" in raw.columns else "close"
-        frame = raw.rename(columns={adjusted: "adj_close"}).copy()
+        frame = raw.copy()
+        frame["adj_close"] = raw[adjusted]
         if frame.columns.duplicated().any():
             frame = frame.loc[:, ~frame.columns.duplicated(keep="first")]
         frame[TICKER_COL] = frame[TICKER_COL].astype(str).str.upper()
@@ -471,26 +622,37 @@ class NasdaqDataLinkClient:
         if frame.duplicated([DATE_COL, TICKER_COL]).any():
             raise DataSourceError("Nasdaq Data Link data contains duplicate (date, ticker) rows")
 
-        effective = pd.to_datetime(frame[DATE_COL], utc=True) + pd.Timedelta(hours=21)
+        effective = pd.to_datetime(frame[DATE_COL], utc=True) + pd.Timedelta(
+            hours=self.config.market_close_utc_hour
+        )
         frame["effective_at"] = effective
         frame["available_at"] = effective + pd.Timedelta(hours=self.config.availability_lag_hours)
         frame["observed_at"] = pd.Timestamp(retrieved_at)
-        if "lastupdated" in raw.columns:
+        if "_provider_updated_at" in raw.columns:
+            frame["provider_updated_at"] = pd.to_datetime(
+                raw["_provider_updated_at"], errors="coerce", utc=True
+            )
+        elif "lastupdated" in raw.columns:
             frame["provider_updated_at"] = pd.to_datetime(
                 raw["lastupdated"], errors="coerce", utc=True
             )
         else:
             frame["provider_updated_at"] = pd.NaT
         frame["source"] = "nasdaq_data_link"
-        frame["source_table"] = self.config.table
-        frame["instrument_id"] = frame[TICKER_COL]
-        frame["currency"] = "USD"
-        frame["exchange_calendar"] = "XNYS"
-        frame["adjustment_state"] = (
-            "provider_adjusted_close_unadjusted_ohlc"
-            if adjusted == "closeadj"
-            else "provider_unadjusted"
+        frame["source_table"] = (
+            raw["_source_code"].astype(str) if "_source_code" in raw.columns else self.config.table
         )
+        frame["instrument_id"] = frame[TICKER_COL]
+        frame["currency"] = self.config.currency
+        frame["exchange_calendar"] = self.config.exchange_calendar
+        if self.config.api_kind == "time_series":
+            frame["adjustment_state"] = f"provider_{self.config.adjustment}_ohlcv"
+        else:
+            frame["adjustment_state"] = (
+                "provider_adjusted_close_unadjusted_ohlc"
+                if adjusted == "closeadj"
+                else "provider_unadjusted"
+            )
         columns = [
             DATE_COL,
             TICKER_COL,
@@ -508,6 +670,23 @@ class NasdaqDataLinkClient:
         ]
         return frame[columns].sort_values([TICKER_COL, DATE_COL]).reset_index(drop=True)
 
+    @staticmethod
+    def _validate_panel_scope(panel: pd.DataFrame, *, request: Mapping[str, Any]) -> None:
+        """Reject provider observations outside the requested identity/date scope."""
+        requested_tickers = set(request["tickers"])
+        returned_tickers = set(panel[TICKER_COL].astype(str))
+        unexpected = sorted(returned_tickers.difference(requested_tickers))
+        if unexpected:
+            raise DataSourceError(
+                f"Nasdaq Data Link returned unrequested ticker identities: {unexpected}"
+            )
+        start = pd.Timestamp(str(request["start"]))
+        end = pd.Timestamp(str(request["end"])) if request["end"] is not None else None
+        if (panel[DATE_COL] < start).any() or (end is not None and (panel[DATE_COL] > end).any()):
+            raise DataSourceError(
+                "Nasdaq Data Link returned observations outside the requested dates"
+            )
+
     def _manifest(
         self,
         *,
@@ -517,9 +696,10 @@ class NasdaqDataLinkClient:
         retrieved_at: str,
         panel: pd.DataFrame,
         page_hashes: list[str],
+        provider_metadata: list[dict[str, Any]],
     ) -> dict[str, Any]:
         return {
-            "manifest_version": 1,
+            "manifest_version": 2,
             "provider": "nasdaq_data_link",
             "request": request,
             "request_hash": request_hash,
@@ -527,6 +707,7 @@ class NasdaqDataLinkClient:
             "retrieved_at": retrieved_at,
             "page_count": len(page_hashes),
             "page_sha256": page_hashes,
+            "provider_metadata": provider_metadata,
             "request_budget": {
                 "used": self.budget.used,
                 "maximum": self.budget.max_requests,
@@ -538,7 +719,10 @@ class NasdaqDataLinkClient:
             "date_max": str(panel[DATE_COL].max().date()),
             "adjustment_state": sorted(panel["adjustment_state"].unique().tolist()),
             "availability_policy": {
-                "effective_at": "market date at conservative 21:00 UTC close",
+                "effective_at": (
+                    "market date at configured "
+                    f"{self.config.market_close_utc_hour:02d}:00 UTC close"
+                ),
                 "available_at": (
                     f"effective_at plus {self.config.availability_lag_hours} hours; "
                     "policy assumption, not a provider publication timestamp"
@@ -573,6 +757,10 @@ class NasdaqDataLinkClient:
         page_hashes = manifest.get("page_sha256")
         if not isinstance(page_hashes, list) or not page_hashes:
             raise DataSourceError("Nasdaq Data Link cached manifest has no pages")
+        if self.config.api_kind == "time_series" and len(page_hashes) != len(request["tickers"]):
+            raise DataSourceError(
+                "Nasdaq Data Link cached time-series page count does not match the request"
+            )
         records: list[dict[str, Any]] = []
         columns: list[str] | None = None
         for page_number, expected_hash in enumerate(page_hashes):
@@ -582,13 +770,21 @@ class NasdaqDataLinkClient:
                     f"Nasdaq Data Link cached page hash mismatch: {page_path.name}"
                 )
             payload = self._read_page(page_path)
-            page_columns, rows, _ = self._parse_page(payload)
+            if self.config.api_kind == "tables":
+                page_columns, rows, _ = self._parse_table_page(payload)
+            else:
+                page_columns, rows, metadata = self._parse_time_series(payload)
+                self._validate_time_series_identity(
+                    metadata,
+                    ticker=str(request["tickers"][page_number]),
+                )
             if columns is None:
                 columns = page_columns
             elif columns != page_columns:
                 raise DataSourceError("Nasdaq Data Link cached page schema mismatch")
             records.extend(dict(zip(page_columns, row, strict=True)) for row in rows)
         panel = self._normalise(records, retrieved_at=str(manifest["retrieved_at"]))
+        self._validate_panel_scope(panel, request=request)
         if int(manifest.get("row_count", -1)) != len(panel):
             raise DataSourceError("Nasdaq Data Link cached row-count mismatch")
         return FetchResult(panel=panel, manifest=manifest, snapshot_dir=snapshot_dir)
@@ -603,6 +799,6 @@ def fetch_nasdaq_data_link(
     base_dir: str | Path | None = None,
     client: NasdaqDataLinkClient | None = None,
 ) -> FetchResult:
-    """Fetch a Nasdaq Data Link table through the bounded client."""
+    """Fetch a Nasdaq Data Link product through the bounded client."""
     active_client = client or NasdaqDataLinkClient(config)
     return active_client.fetch(tickers, start, end, base_dir=base_dir)
