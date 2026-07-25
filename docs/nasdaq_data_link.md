@@ -125,6 +125,23 @@ returned the same panel. The source snapshot hash begins `c3e99355476d`; the pro
 panel hash begins `7a9471a33fb9`. Generated observations and manifests remain in
 ignored local data roots.
 
+The redistribution-safe
+[`docs/examples/nasdaq_wiki_source_manifest.json`](examples/nasdaq_wiki_source_manifest.json)
+records the exact request, hashes, coverage, budget, and limitations without provider
+observations or a credential. Reproduce the credential-free replay benchmark after an
+acquisition with:
+
+```bash
+python scripts/benchmark_nasdaq_cache_replay.py
+```
+
+The 2026-07-24 seven-replay reference measured a 0.180-second median for 13,169 rows
+(73,281 rows/second), made zero network requests, exposed no credential to the client,
+and reproduced the same snapshot each time. Raw machine-readable evidence is in
+[`docs/benchmarks/nasdaq_cache_replay_2026-07-24.json`](benchmarks/nasdaq_cache_replay_2026-07-24.json).
+This is a single-machine warm-filesystem measurement, not a provider-latency or
+cross-machine performance claim.
+
 This is useful real U.S. equity data for ingestion, feature, backtest, portfolio, risk,
 reporting, and data-contract engineering. It is not current or production-grade
 trading evidence: the dataset is static, its universe is not proven point-in-time, and
