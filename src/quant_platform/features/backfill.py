@@ -132,7 +132,7 @@ class _Checkpoint(_Contract):
     relative_path: str
     sha256: str
     content_sha256: str
-    rows: int = Field(ge=1)
+    rows: int = Field(ge=0)
 
 
 PartitionLoader = Callable[[BackfillPartition], pd.DataFrame]
@@ -311,14 +311,16 @@ class BackfillOrchestrator:
         frame = loader(partition)
         if not isinstance(frame, pd.DataFrame):
             raise BackfillError("partition loader must return a pandas DataFrame")
-        if len(frame) < 1 or len(frame) > plan.max_rows_per_partition:
-            raise BackfillError(f"partition rows must be in [1, {plan.max_rows_per_partition}]")
+        if len(frame) > plan.max_rows_per_partition:
+            raise BackfillError(f"partition rows must be in [0, {plan.max_rows_per_partition}]")
         if DATE_COL not in frame or TICKER_COL not in frame:
             raise BackfillError("partition is missing date/ticker keys")
         dates = pd.to_datetime(frame[DATE_COL], errors="coerce")
         if dates.isna().any():
             raise BackfillError("partition contains invalid dates")
-        if dates.min().date() < partition.start or dates.max().date() > partition.end:
+        if not frame.empty and (
+            dates.min().date() < partition.start or dates.max().date() > partition.end
+        ):
             raise BackfillError("partition loader returned rows outside the planned interval")
         ordered = frame.copy()
         ordered[DATE_COL] = dates
@@ -337,7 +339,7 @@ class BackfillOrchestrator:
                 compression="zstd",
                 use_dictionary=True,
                 write_statistics=True,
-                row_group_size=min(250_000, len(ordered)),
+                row_group_size=min(250_000, max(1, len(ordered))),
             )
             _fsync_file(temporary)
             os.replace(temporary, final)
@@ -364,6 +366,8 @@ class BackfillOrchestrator:
             path = self._verify_checkpoint(checkpoint)
             frames.append(pd.read_parquet(path))
         result = pd.concat(frames, ignore_index=True)
+        if result.empty:
+            raise BackfillError("assembled backfill contains no usable feature rows")
         result[DATE_COL] = pd.to_datetime(result[DATE_COL])
         result = result.sort_values([DATE_COL, TICKER_COL], kind="mergesort").reset_index(drop=True)
         if result.duplicated([DATE_COL, TICKER_COL]).any():

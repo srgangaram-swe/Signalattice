@@ -126,6 +126,12 @@ history and forward-label horizon. The expanding drawdown feature declares an ef
 unbounded lookback, forcing all available prior history into that partition rather than
 resetting the running peak at a partition boundary.
 
+A leading partition may produce zero application rows when the available history is
+consumed entirely by declared warm-up and forward-label requirements. Such a checkpoint
+must still carry the exact expected schema and is persisted, hashed, row-count verified,
+and reused like any other checkpoint. Empty final assemblies fail: at least one later
+partition must produce usable feature rows before immutable publication can begin.
+
 DuckDB's stable local concurrency model allows one read/write process or multiple read-only
 processes. Signalattice therefore does not claim safe uncoordinated multi-process writers;
 a distributed/server catalog would require a separate architecture decision.
