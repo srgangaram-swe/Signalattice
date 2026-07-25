@@ -169,6 +169,11 @@ def test_cli_exports_and_validates_signal_foundry_bundle(tmp_path, monkeypatch):
         "retrieved_at": "2026-07-23T00:00:00Z",
         "contains_api_key": False,
         "observations_redistributable": True,
+        "point_in_time_limits": {
+            "historical_revisions_complete": False,
+            "universe_membership_point_in_time": False,
+            "corporate_actions_complete": False,
+        },
     }
     (processed_dir / "panel_metadata.json").write_text(
         json.dumps({"source": "nasdaq_data_link", "source_manifest": source_manifest})
