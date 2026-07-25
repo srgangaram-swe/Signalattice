@@ -202,9 +202,9 @@ signalattice ingest-data --config configs/nasdaq_xdus_sample.yaml --force
 # Full configured pull; cache-first after the initial successful request.
 signalattice ingest-data --config configs/nasdaq_data_link.yaml
 
-# Publish the verified processed panel for AlphaForge.
+# Publish the proven cached WIKI panel for AlphaForge without another request.
 signalattice export-signal-foundry-bundle \
-  --config configs/nasdaq_data_link.yaml \
+  --config configs/nasdaq_wiki_sample.yaml \
   --output data/signal-foundry-bundles
 
 # Validate before any consumer reads observations.
@@ -214,3 +214,6 @@ signalattice validate-signal-foundry-bundle \
 
 Do not commit generated files. A public evidence report may contain safe aggregates and
 hashes only when the data license permits and observations cannot be reconstructed.
+The reference WIKI export's safe aggregate record is
+[`docs/examples/nasdaq_wiki_bundle_evidence.json`](examples/nasdaq_wiki_bundle_evidence.json);
+the six-partition Parquet bundle itself remains ignored and local.

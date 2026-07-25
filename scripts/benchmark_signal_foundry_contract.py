@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import platform
+import statistics
 import tempfile
 import time
 import tracemalloc
@@ -69,34 +70,73 @@ def main() -> None:
         "retrieved_at": "2026-07-23T00:00:00Z",
         "contains_api_key": False,
         "observations_redistributable": True,
-        "point_in_time_limits": {},
+        "point_in_time_limits": {
+            "historical_revisions_complete": True,
+            "universe_membership_point_in_time": False,
+            "corporate_actions_complete": False,
+        },
     }
+    samples: list[dict[str, float]] = []
+    bundle_bytes = 0
+    filtered_rows = 0
     tracemalloc.start()
-    with tempfile.TemporaryDirectory(prefix="signal-foundry-contract-") as temporary:
-        bundle, export_seconds = _timed(
-            lambda: export_signal_foundry_bundle(
-                frame,
-                Path(temporary),
-                source_manifest=source_manifest,
-                producer_git_sha="0" * 40,
+    for _ in range(7):
+        with tempfile.TemporaryDirectory(prefix="signal-foundry-contract-") as temporary:
+            bundle, export_seconds = _timed(
+                lambda: export_signal_foundry_bundle(
+                    frame,
+                    Path(temporary),
+                    source_manifest=source_manifest,
+                    producer_git_sha="0" * 40,
+                )
             )
-        )
-        _, validate_seconds = _timed(lambda: validate_signal_foundry_bundle(bundle))
-        cutoff = "2022-01-01T00:00:00Z"
-        filtered, read_seconds = _timed(lambda: load_signal_foundry_bundle(bundle, as_of=cutoff))
-        bytes_on_disk = sum(path.stat().st_size for path in bundle.rglob("*") if path.is_file())
+            _, validate_seconds = _timed(
+                lambda bundle=bundle: validate_signal_foundry_bundle(bundle)
+            )
+            cutoff = "2022-01-01T00:00:00Z"
+            filtered, read_seconds = _timed(
+                lambda bundle=bundle, cutoff=cutoff: load_signal_foundry_bundle(
+                    bundle, as_of=cutoff
+                )
+            )
+            bundle_bytes = sum(path.stat().st_size for path in bundle.rglob("*") if path.is_file())
+            filtered_rows = len(filtered)
+            samples.append(
+                {
+                    "export_seconds": export_seconds,
+                    "validate_seconds": validate_seconds,
+                    "as_of_read_seconds": read_seconds,
+                }
+            )
     _, peak_bytes = tracemalloc.get_traced_memory()
     tracemalloc.stop()
+
+    def summary(metric: str) -> dict[str, float]:
+        values = [sample[metric] for sample in samples]
+        ordered = sorted(values)
+        return {
+            "min": min(values),
+            "median": statistics.median(values),
+            "p95_nearest_rank": ordered[-1],
+            "max": max(values),
+        }
+
+    median_export = summary("export_seconds")["median"]
     result = {
         "benchmark": "signal_foundry_contract",
+        "schema_version": "1.1.0",
+        "repetitions": len(samples),
         "rows": len(frame),
         "tickers": int(frame["ticker"].nunique()),
-        "filtered_rows": len(filtered),
-        "export_seconds": export_seconds,
-        "validate_seconds": validate_seconds,
-        "as_of_read_seconds": read_seconds,
-        "rows_per_export_second": len(frame) / export_seconds,
-        "bundle_bytes": bytes_on_disk,
+        "filtered_rows": filtered_rows,
+        "timing_seconds": {
+            "export": summary("export_seconds"),
+            "validate": summary("validate_seconds"),
+            "as_of_read": summary("as_of_read_seconds"),
+        },
+        "raw_samples": samples,
+        "median_rows_per_export_second": len(frame) / median_export,
+        "bundle_bytes": bundle_bytes,
         "peak_tracemalloc_bytes": peak_bytes,
         "python": platform.python_version(),
         "platform": platform.platform(),
