@@ -1,0 +1,43 @@
+{
+  "bundle_id": "c585dd09e089d86f4fa1933be404f686e9f708509126fb59d01cbd4ac04d0916",
+  "contract": "signal-foundry-market-data",
+  "date_max": "2018-03-27",
+  "date_min": "2013-01-02",
+  "evidence_generated_at": "2026-07-25T05:22:28Z",
+  "files": {
+    "count": 6,
+    "partitioning": "calendar year"
+  },
+  "license": {
+    "bundle_must_remain_local": true,
+    "observations_included": false,
+    "public_evidence_must_be_aggregate_or_synthetic": true
+  },
+  "point_in_time_limits": {
+    "corporate_actions_complete": false,
+    "historical_revisions_complete": false,
+    "universe_membership_point_in_time": false
+  },
+  "producer_git_sha": "7120a39f467553d063b424578ca5477da44f94b6",
+  "rows": 13169,
+  "schema_version": "1.0.0",
+  "source_manifest_sha256": "ab2641323c068cf3b7ce7c2fee4cfc16f455d129a31f305eb4ebc30d5e1c7ed1",
+  "source_snapshot_hash": "c3e99355476ddc7370b9921b8d9495cf0e62ed52f04c83f68ac4ca9ad8bcc96d",
+  "tickers": [
+    "AAPL",
+    "CAT",
+    "IBM",
+    "JNJ",
+    "JPM",
+    "KO",
+    "MSFT",
+    "PG",
+    "WMT",
+    "XOM"
+  ],
+  "validation": {
+    "command": "signalattice validate-signal-foundry-bundle data/signal-foundry-bundles/<bundle-id>",
+    "network_requests": 0,
+    "result": "passed"
+  }
+}
