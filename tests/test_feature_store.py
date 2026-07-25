@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from quant_platform.features.backfill import (
+    BackfillError,
     BackfillInterrupted,
     BackfillOrchestrator,
     BackfillPartition,
@@ -380,6 +381,36 @@ def test_backfill_resumes_after_durable_interruption_and_is_idempotent(tmp_path)
     assert repeated.reused_partitions == 3
     assert repeated.computed_partitions == 0
     assert calls.count(plan.partitions[0].key) == 1
+
+
+def test_backfill_accepts_empty_warmup_partition_but_rejects_empty_assembly(tmp_path):
+    store = FeatureStore(tmp_path / "store")
+    orchestrator = BackfillOrchestrator(store)
+    request = _request()
+    plan = BackfillPlan.create(request, max_workers=1, max_attempts=2)
+    full = _frame()
+
+    def leading_warmup_loader(partition: BackfillPartition) -> pd.DataFrame:
+        if partition == plan.partitions[0]:
+            return full.iloc[0:0].copy()
+        dates = pd.to_datetime(full["date"]).dt.date
+        return full.loc[(dates >= partition.start) & (dates <= partition.end)].copy()
+
+    result = orchestrator.run(plan, leading_warmup_loader)
+    status = orchestrator.status(plan.identity)
+    expected = full.loc[pd.to_datetime(full["date"]).dt.date >= plan.partitions[1].start]
+
+    assert status["partitions"][0]["status"] == "completed"
+    assert status["partitions"][0]["rows"] == 0
+    assert len(store.read(result.object_id)) == len(expected)
+
+    empty_store = FeatureStore(tmp_path / "empty-store")
+    empty_orchestrator = BackfillOrchestrator(empty_store)
+    with pytest.raises(BackfillError, match="no usable feature rows"):
+        empty_orchestrator.run(
+            plan,
+            lambda _partition: full.iloc[0:0].copy(),
+        )
 
 
 def test_backfill_records_redacted_bounded_failure(tmp_path):
