@@ -30,6 +30,7 @@ from quant_platform.features.contracts import (
     default_contracts,
     get_contract,
     list_contracts,
+    statistical_contracts,
     validate_contract_panel,
 )
 from quant_platform.features.pipeline import (
@@ -45,6 +46,7 @@ __all__ = [
     "build_contract_features",
     "contract_metadata_frame",
     "default_contracts",
+    "statistical_contracts",
     "get_contract",
     "list_contracts",
     "validate_contract_panel",
