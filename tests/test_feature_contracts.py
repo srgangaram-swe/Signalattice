@@ -201,11 +201,20 @@ def test_features_are_invariant_to_price_scaling(panel: pd.DataFrame) -> None:
         scaled_panel.loc[mask, col] *= 7.5  # a clean 7.5-for-1 split adjustment
     scaled = build_contract_features(scaled_panel)
 
+    # Dollar-denominated liquidity features (log dollar volume, Amihud) carry a
+    # price scale by construction and are excluded; the rest are scale-free.
+    scale_bearing_units = {Unit.LOG_DOLLAR_VOLUME, Unit.ILLIQUIDITY}
+    invariant_columns = [
+        f"fc_{contract.name}"
+        for contract in default_contracts()
+        if contract.unit not in scale_bearing_units
+    ]
+
     base_bbb = base[base["ticker"] == "BBB"].reset_index(drop=True)
     scaled_bbb = scaled[scaled["ticker"] == "BBB"].reset_index(drop=True)
     np.testing.assert_allclose(
-        base_bbb[FEATURE_COLUMNS].to_numpy(dtype=float),
-        scaled_bbb[FEATURE_COLUMNS].to_numpy(dtype=float),
+        base_bbb[invariant_columns].to_numpy(dtype=float),
+        scaled_bbb[invariant_columns].to_numpy(dtype=float),
         rtol=1e-9,
         atol=1e-12,
         equal_nan=True,
