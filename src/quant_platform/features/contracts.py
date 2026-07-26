@@ -1,4 +1,4 @@
-"""Versioned, self-describing feature contracts (Signal Foundry SF-S2-MR1).
+"""Versioned, self-describing feature contracts (Signal Foundry SF-S2-MR1/MR2).
 
 A :class:`FeatureContract` pairs a *causal* computation kernel with the metadata
 a research platform needs to reason about a feature without reading its code:
@@ -19,7 +19,8 @@ Design invariants
   duplicate ``(date, ticker)`` keys) raises before any feature is computed.
   Genuine gaps (``NaN``) propagate rather than being silently imputed.
 * **No new mathematics.** Kernels compose the audited primitives in
-  :mod:`quant_platform.features.technical` and
+  :mod:`quant_platform.features.technical`,
+  :mod:`quant_platform.features.statistics`, and
   :mod:`quant_platform.features.cross_sectional`; this module adds the contract,
   metadata, and registry layer only.
 
@@ -40,6 +41,7 @@ import numpy as np
 import pandas as pd
 
 from quant_platform.data.schema import DATE_COL, TICKER_COL
+from quant_platform.features import statistics as st
 from quant_platform.features import technical as ta
 from quant_platform.features.cross_sectional import (
     cross_sectional_rank,
@@ -67,6 +69,9 @@ class FeatureFamily(StrEnum):
     MOMENTUM = "momentum"
     TREND = "trend"
     MEAN_REVERSION = "mean_reversion"
+    VOLATILITY = "volatility"
+    DISTRIBUTION = "distribution"
+    DEPENDENCE = "dependence"
 
 
 class Unit(StrEnum):
@@ -78,6 +83,10 @@ class Unit(StrEnum):
     ZSCORE = "zscore"  # standardised, dimensionless
     RANK_PCT = "rank_pct"  # cross-sectional percentile in [0, 1]
     LOG_RESIDUAL = "log_residual"  # residual in log-price units (~fractional)
+    ANNUALIZED_VOL = "annualized_vol"  # annualised standard-deviation units
+    CORRELATION = "correlation"  # Pearson-style coefficient in [-1, 1]
+    INFORMATION_NATS = "information_nats"  # mutual information in nats (>= 0)
+    DIMENSIONLESS = "dimensionless"  # pure number (skew, kurtosis, Hurst, ratio)
 
 
 class MissingDataPolicy(StrEnum):
@@ -474,12 +483,413 @@ def _cross_sectional_zscore_contract(window: int) -> FeatureContract:
 
 
 # ---------------------------------------------------------------------------
+# Statistical contract builders (SF-S2-MR2): volatility, distribution, dependence
+# ---------------------------------------------------------------------------
+
+_NON_NEGATIVE = NumericalRange(lower=0.0, upper=None)
+_CORRELATION_RANGE = NumericalRange(lower=-1.0, upper=1.0)
+
+
+def _returns(group: pd.DataFrame) -> pd.Series:
+    """One-bar simple adjusted-close return of a single-asset group."""
+    return ta.simple_returns(group[PRICE_FIELD], 1)
+
+
+def _market_return(panel: pd.DataFrame) -> pd.Series:
+    """Equal-weight cross-sectional mean of one-bar returns (market proxy).
+
+    Self-contained: needs no designated benchmark ticker. On a single-name date
+    it degenerates to that name's own return.
+    """
+    asset_returns = _per_asset(panel, _returns)
+    frame = pd.DataFrame(
+        {DATE_COL: panel[DATE_COL].to_numpy(), "_ret": asset_returns.to_numpy()},
+        index=panel.index,
+    )
+    return frame.groupby(DATE_COL)["_ret"].transform("mean")
+
+
+def _parkinson_contract(window: int) -> FeatureContract:
+    return FeatureContract(
+        name=f"parkinson_vol_{window}",
+        version="1.0.0",
+        family=FeatureFamily.VOLATILITY,
+        scope=Scope.PER_ASSET,
+        unit=Unit.ANNUALIZED_VOL,
+        description=f"Annualised Parkinson high-low range volatility over {window} bars.",
+        inputs=("high", "low"),
+        params=(("window", window),),
+        lookback=window,
+        warmup=window,
+        numerical_range=_NON_NEGATIVE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(
+                st.parkinson_volatility(group["high"], group["low"], window), window
+            ),
+        ),
+    )
+
+
+def _garman_klass_contract(window: int) -> FeatureContract:
+    return FeatureContract(
+        name=f"garman_klass_vol_{window}",
+        version="1.0.0",
+        family=FeatureFamily.VOLATILITY,
+        scope=Scope.PER_ASSET,
+        unit=Unit.ANNUALIZED_VOL,
+        description=f"Annualised Garman-Klass OHLC volatility over {window} bars.",
+        inputs=("open", "high", "low", "close"),
+        params=(("window", window),),
+        lookback=window,
+        warmup=window,
+        numerical_range=_NON_NEGATIVE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(
+                st.garman_klass_volatility(
+                    group["open"], group["high"], group["low"], group["close"], window
+                ),
+                window,
+            ),
+        ),
+    )
+
+
+def _rogers_satchell_contract(window: int) -> FeatureContract:
+    return FeatureContract(
+        name=f"rogers_satchell_vol_{window}",
+        version="1.0.0",
+        family=FeatureFamily.VOLATILITY,
+        scope=Scope.PER_ASSET,
+        unit=Unit.ANNUALIZED_VOL,
+        description=f"Annualised drift-independent Rogers-Satchell volatility over {window} bars.",
+        inputs=("open", "high", "low", "close"),
+        params=(("window", window),),
+        lookback=window,
+        warmup=window,
+        numerical_range=_NON_NEGATIVE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(
+                st.rogers_satchell_volatility(
+                    group["open"], group["high"], group["low"], group["close"], window
+                ),
+                window,
+            ),
+        ),
+    )
+
+
+def _ewma_vol_contract(span: int) -> FeatureContract:
+    return FeatureContract(
+        name=f"ewma_vol_{span}",
+        version="1.0.0",
+        family=FeatureFamily.VOLATILITY,
+        scope=Scope.PER_ASSET,
+        unit=Unit.ANNUALIZED_VOL,
+        description=f"Annualised exponentially weighted return volatility (span {span}).",
+        inputs=(PRICE_FIELD,),
+        params=(("span", span),),
+        lookback=span,
+        warmup=span,
+        numerical_range=_NON_NEGATIVE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(st.ewma_volatility(_returns(group), span), span),
+        ),
+    )
+
+
+def _skewness_contract(window: int) -> FeatureContract:
+    return FeatureContract(
+        name=f"skew_{window}",
+        version="1.0.0",
+        family=FeatureFamily.DISTRIBUTION,
+        scope=Scope.PER_ASSET,
+        unit=Unit.DIMENSIONLESS,
+        description=f"Rolling {window}-bar sample skewness of returns.",
+        inputs=(PRICE_FIELD,),
+        params=(("window", window),),
+        lookback=window,
+        warmup=window,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(st.rolling_skewness(_returns(group), window), window),
+        ),
+    )
+
+
+def _kurtosis_contract(window: int) -> FeatureContract:
+    return FeatureContract(
+        name=f"kurt_{window}",
+        version="1.0.0",
+        family=FeatureFamily.DISTRIBUTION,
+        scope=Scope.PER_ASSET,
+        unit=Unit.DIMENSIONLESS,
+        description=f"Rolling {window}-bar excess kurtosis of returns.",
+        inputs=(PRICE_FIELD,),
+        params=(("window", window),),
+        lookback=window,
+        warmup=window,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(st.rolling_kurtosis(_returns(group), window), window),
+        ),
+    )
+
+
+def _downside_deviation_contract(window: int) -> FeatureContract:
+    return FeatureContract(
+        name=f"downside_dev_{window}",
+        version="1.0.0",
+        family=FeatureFamily.DISTRIBUTION,
+        scope=Scope.PER_ASSET,
+        unit=Unit.ANNUALIZED_VOL,
+        description=f"Annualised downside deviation of returns over {window} bars.",
+        inputs=(PRICE_FIELD,),
+        params=(("window", window),),
+        lookback=window,
+        warmup=window,
+        numerical_range=_NON_NEGATIVE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(st.downside_deviation(_returns(group), window), window),
+        ),
+    )
+
+
+def _mad_contract(window: int) -> FeatureContract:
+    return FeatureContract(
+        name=f"mad_{window}",
+        version="1.0.0",
+        family=FeatureFamily.DISTRIBUTION,
+        scope=Scope.PER_ASSET,
+        unit=Unit.SIMPLE_RETURN,
+        description=f"Robust median absolute deviation of returns over {window} bars.",
+        inputs=(PRICE_FIELD,),
+        params=(("window", window),),
+        lookback=window,
+        warmup=window,
+        numerical_range=_NON_NEGATIVE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(
+                st.median_absolute_deviation(_returns(group), window), window
+            ),
+        ),
+    )
+
+
+def _autocorrelation_contract(window: int, lag: int) -> FeatureContract:
+    warmup = window + lag
+    return FeatureContract(
+        name=f"autocorr_{lag}_{window}",
+        version="1.0.0",
+        family=FeatureFamily.DEPENDENCE,
+        scope=Scope.PER_ASSET,
+        unit=Unit.CORRELATION,
+        description=f"Rolling {window}-bar lag-{lag} return autocorrelation.",
+        inputs=(PRICE_FIELD,),
+        params=(("window", window), ("lag", lag)),
+        lookback=warmup,
+        warmup=warmup,
+        numerical_range=_CORRELATION_RANGE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(
+                st.rolling_autocorrelation(_returns(group), window, lag), warmup
+            ),
+        ),
+    )
+
+
+def _partial_autocorrelation_contract(window: int) -> FeatureContract:
+    warmup = window + 2
+    return FeatureContract(
+        name=f"pacf_2_{window}",
+        version="1.0.0",
+        family=FeatureFamily.DEPENDENCE,
+        scope=Scope.PER_ASSET,
+        unit=Unit.CORRELATION,
+        description=f"Rolling {window}-bar lag-2 partial autocorrelation of returns.",
+        inputs=(PRICE_FIELD,),
+        params=(("window", window),),
+        lookback=warmup,
+        warmup=warmup,
+        numerical_range=_CORRELATION_RANGE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(
+                st.partial_autocorrelation_lag2(_returns(group), window), warmup
+            ),
+        ),
+    )
+
+
+def _hurst_contract(window: int) -> FeatureContract:
+    return FeatureContract(
+        name=f"hurst_{window}",
+        version="1.0.0",
+        family=FeatureFamily.DEPENDENCE,
+        scope=Scope.PER_ASSET,
+        unit=Unit.DIMENSIONLESS,
+        description=(
+            f"Rolling {window}-bar Hurst exponent of log price via the structure "
+            "function (~0.5 random walk, >0.5 trending, <0.5 mean-reverting)."
+        ),
+        inputs=(PRICE_FIELD,),
+        params=(("window", window),),
+        lookback=window,
+        warmup=window,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(st.hurst_exponent(group[PRICE_FIELD], window), window),
+        ),
+    )
+
+
+def _variance_ratio_contract(window: int, q: int) -> FeatureContract:
+    return FeatureContract(
+        name=f"var_ratio_{q}_{window}",
+        version="1.0.0",
+        family=FeatureFamily.DEPENDENCE,
+        scope=Scope.PER_ASSET,
+        unit=Unit.DIMENSIONLESS,
+        description=f"Rolling {window}-bar Lo-MacKinlay variance ratio at horizon q={q}.",
+        inputs=(PRICE_FIELD,),
+        params=(("window", window), ("q", q)),
+        lookback=window,
+        warmup=window,
+        numerical_range=_NON_NEGATIVE,
+        kernel=lambda panel: _per_asset(
+            panel,
+            lambda group: _mask_warmup(st.variance_ratio(_returns(group), window, q), window),
+        ),
+    )
+
+
+def _market_beta_contract(window: int) -> FeatureContract:
+    warmup = window + 1
+
+    def kernel(panel: pd.DataFrame) -> pd.Series:
+        market = _market_return(panel)
+
+        def per(group: pd.DataFrame) -> pd.Series:
+            beta = ta.rolling_beta(_returns(group), market.loc[group.index], window)
+            return _mask_warmup(beta, warmup)
+
+        return _per_asset(panel, per)
+
+    return FeatureContract(
+        name=f"beta_mkt_{window}",
+        version="1.0.0",
+        family=FeatureFamily.DEPENDENCE,
+        scope=Scope.PER_ASSET,
+        unit=Unit.DIMENSIONLESS,
+        description=(f"Rolling {window}-bar beta of returns to the equal-weight market proxy."),
+        inputs=(PRICE_FIELD,),
+        params=(("window", window),),
+        lookback=warmup,
+        warmup=warmup,
+        kernel=kernel,
+    )
+
+
+def _market_correlation_contract(window: int) -> FeatureContract:
+    warmup = window + 1
+
+    def kernel(panel: pd.DataFrame) -> pd.Series:
+        market = _market_return(panel)
+
+        def per(group: pd.DataFrame) -> pd.Series:
+            corr = st.rolling_correlation(_returns(group), market.loc[group.index], window)
+            return _mask_warmup(corr, warmup)
+
+        return _per_asset(panel, per)
+
+    return FeatureContract(
+        name=f"corr_mkt_{window}",
+        version="1.0.0",
+        family=FeatureFamily.DEPENDENCE,
+        scope=Scope.PER_ASSET,
+        unit=Unit.CORRELATION,
+        description=(
+            f"Rolling {window}-bar correlation of returns to the equal-weight market proxy."
+        ),
+        inputs=(PRICE_FIELD,),
+        params=(("window", window),),
+        lookback=warmup,
+        warmup=warmup,
+        numerical_range=_CORRELATION_RANGE,
+        kernel=kernel,
+    )
+
+
+def _market_mutual_information_contract(window: int, bins: int) -> FeatureContract:
+    warmup = window + 1
+
+    def kernel(panel: pd.DataFrame) -> pd.Series:
+        market = _market_return(panel)
+
+        def per(group: pd.DataFrame) -> pd.Series:
+            info = st.rolling_mutual_information(
+                _returns(group), market.loc[group.index], window, bins=bins
+            )
+            return _mask_warmup(info, warmup)
+
+        return _per_asset(panel, per)
+
+    return FeatureContract(
+        name=f"mutual_info_mkt_{window}",
+        version="1.0.0",
+        family=FeatureFamily.DEPENDENCE,
+        scope=Scope.PER_ASSET,
+        unit=Unit.INFORMATION_NATS,
+        description=(
+            f"Rolling {window}-bar binned mutual information between returns and the "
+            "equal-weight market proxy."
+        ),
+        inputs=(PRICE_FIELD,),
+        params=(("window", window), ("bins", bins)),
+        lookback=warmup,
+        warmup=warmup,
+        numerical_range=_NON_NEGATIVE,
+        kernel=kernel,
+    )
+
+
+def statistical_contracts() -> tuple[FeatureContract, ...]:
+    """The frozen SF-S2-MR2 volatility, distribution, and dependence contracts."""
+    return (
+        # Volatility.
+        _parkinson_contract(21),
+        _garman_klass_contract(21),
+        _rogers_satchell_contract(21),
+        _ewma_vol_contract(21),
+        # Distribution.
+        _skewness_contract(63),
+        _kurtosis_contract(63),
+        _downside_deviation_contract(63),
+        _mad_contract(63),
+        # Dependence / memory.
+        _autocorrelation_contract(63, 1),
+        _partial_autocorrelation_contract(63),
+        _hurst_contract(128),
+        _variance_ratio_contract(63, 5),
+        _market_beta_contract(63),
+        _market_correlation_contract(63),
+        _market_mutual_information_contract(63, 8),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
 
 def default_contracts() -> tuple[FeatureContract, ...]:
-    """The frozen default set of conventional SF-S2-MR1 feature contracts."""
+    """The frozen default set of SF-S2-MR1 and SF-S2-MR2 feature contracts."""
     return (
         # Returns.
         _return_contract(1),
@@ -506,6 +916,8 @@ def default_contracts() -> tuple[FeatureContract, ...]:
         # Cross-sectional.
         _cross_sectional_rank_contract(63),
         _cross_sectional_zscore_contract(63),
+        # Volatility, distribution, and dependence (SF-S2-MR2).
+        *statistical_contracts(),
     )
 
 

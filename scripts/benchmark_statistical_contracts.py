@@ -1,13 +1,15 @@
-"""Deterministic local benchmark for conventional feature-contract evaluation.
+"""Deterministic local benchmark for the SF-S2-MR2 statistical feature contracts.
 
-Reports wall time and peak memory for :func:`build_contract_features` across
-representative panel sizes. Fully offline and deterministic (fixed seed,
-synthetic data). Emulator/laptop-scale numbers — label them as such; this is not
-a distributed or provider-network benchmark.
+Reports wall time and peak memory for the volatility, distribution, and
+dependence contracts across representative panel sizes. Several estimators
+(Hurst, variance ratio, mutual information) run a per-window kernel and dominate
+the cost, so panel sizes are more modest than the vectorised MR1 benchmark.
+Fully offline and deterministic; laptop-scale numbers, not a distributed
+benchmark.
 
 Usage::
 
-    python scripts/benchmark_feature_contracts.py
+    python scripts/benchmark_statistical_contracts.py
 """
 
 from __future__ import annotations
@@ -21,28 +23,14 @@ from collections.abc import Callable
 import numpy as np
 import pandas as pd
 
-from quant_platform.features.contracts import (
-    FeatureFamily,
-    build_contract_features,
-    default_contracts,
-)
+from quant_platform.features.contracts import build_contract_features, statistical_contracts
 
-# The conventional (SF-S2-MR1) families; the statistical (MR2) contracts have
-# their own benchmark in ``benchmark_statistical_contracts.py``.
-_CONVENTIONAL_FAMILIES = frozenset(
-    {
-        FeatureFamily.RETURN,
-        FeatureFamily.MOMENTUM,
-        FeatureFamily.TREND,
-        FeatureFamily.MEAN_REVERSION,
-    }
-)
-
-# (tickers, dates) grids covering a small universe through a mid-size panel.
+# (tickers, dates) grids; kept modest because Hurst/variance-ratio/mutual-
+# information use per-window kernels (roughly O(rows * window)).
 PANEL_SIZES: tuple[tuple[int, int], ...] = (
     (16, 504),
+    (32, 1_008),
     (64, 1_260),
-    (256, 2_520),
 )
 
 
@@ -76,7 +64,7 @@ def _timed[T](operation: Callable[[], T]) -> tuple[T, float]:
 
 
 def main() -> None:
-    contracts = tuple(c for c in default_contracts() if c.family in _CONVENTIONAL_FAMILIES)
+    contracts = statistical_contracts()
     n_contracts = len(contracts)
     cases = []
     for tickers, dates in PANEL_SIZES:
@@ -98,7 +86,7 @@ def main() -> None:
             }
         )
     result = {
-        "benchmark": "feature_contracts",
+        "benchmark": "statistical_contracts",
         "n_contracts": n_contracts,
         "cases": cases,
         "python": platform.python_version(),
@@ -110,6 +98,7 @@ def main() -> None:
             "synthetic deterministic data",
             "warm interpreter and cache state is not controlled",
             "laptop-scale; not a distributed benchmark",
+            "per-window kernels (Hurst, variance ratio, mutual information) dominate",
         ],
     }
     print(json.dumps(result, indent=2, sort_keys=True))
