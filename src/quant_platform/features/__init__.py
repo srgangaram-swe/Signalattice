@@ -17,6 +17,9 @@ Public API:
 - :func:`build_time_frequency_tensor` and :class:`TimeFrequencyStore` —
   opt-in spectrogram/scalogram tensors and their content-addressed store
   (SF-S3-MR2); tensors never join the feature matrix.
+- :func:`emd` / :func:`eemd` / :func:`ceemdan` / :func:`vmd` and
+  :func:`build_representation_descriptors` — bounded adaptive decompositions
+  and the shared representation-comparison contract (SF-S3-MR3).
 """
 
 from __future__ import annotations
@@ -40,12 +43,25 @@ from quant_platform.features.contracts import (
     statistical_contracts,
     validate_contract_panel,
 )
+from quant_platform.features.decomposition import (
+    Decomposition,
+    DecompositionReport,
+    ceemdan,
+    eemd,
+    emd,
+    vmd,
+)
 from quant_platform.features.pipeline import (
     FEATURE_PREFIX,
     build_features,
     feature_columns,
 )
 from quant_platform.features.registry import FeatureRegistry, FeatureSpec
+from quant_platform.features.representations import (
+    REPRESENTATION_FAMILIES,
+    build_representation_descriptors,
+    shared_window_identity,
+)
 from quant_platform.features.spectral import (
     SPECTRAL_PREFIX,
     build_spectral_features,
@@ -69,6 +85,7 @@ __all__ = [
     "CONTRACT_PREFIX",
     "CONTRACT_REGISTRY",
     "FEATURE_PREFIX",
+    "REPRESENTATION_FAMILIES",
     "SPECTRAL_PREFIX",
     "FeatureContract",
     "FeatureFamily",
@@ -76,6 +93,8 @@ __all__ = [
     "FeatureOutputContract",
     "FeatureRegistry",
     "FeatureSpec",
+    "Decomposition",
+    "DecompositionReport",
     "FeatureStore",
     "MissingDataPolicy",
     "NumericalRange",
@@ -87,17 +106,23 @@ __all__ = [
     "Unit",
     "build_contract_features",
     "build_features",
+    "build_representation_descriptors",
     "build_spectral_features",
     "build_time_frequency_tensor",
+    "ceemdan",
     "contract_metadata_frame",
     "default_contracts",
+    "eemd",
+    "emd",
     "feature_columns",
     "get_contract",
     "liquidity_contracts",
     "list_contracts",
     "normalize_tensor",
+    "shared_window_identity",
     "spectral_column_names",
     "spectral_feature_registry",
     "statistical_contracts",
     "validate_contract_panel",
+    "vmd",
 ]

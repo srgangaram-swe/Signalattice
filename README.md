@@ -241,6 +241,7 @@ tests/                      unit and integration contracts
 - [Feature registry, immutable store, and resumable backfills](docs/feature_store.md)
 - [Causal spectral transforms and descriptors](docs/spectral_features.md)
 - [Versioned time-frequency tensors](docs/time_frequency_tensors.md)
+- [Adaptive decomposition and the representation contract](docs/adaptive_decomposition.md)
 - [Methodology](docs/methodology.md)
 - [Model card](docs/model_card.md)
 - [Data card](docs/data_card.md)

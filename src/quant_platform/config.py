@@ -419,6 +419,57 @@ class TimeFrequencyConfig(_Base):
         return self
 
 
+RepresentationFamily = Literal["raw", "spectral", "wavelet", "emd", "vmd"]
+
+
+def _default_representation_families() -> list[RepresentationFamily]:
+    """Return every comparable family, freshly allocated per instance."""
+    return ["raw", "spectral", "wavelet", "emd", "vmd"]
+
+
+class RepresentationConfig(_Base):
+    """Shared contract for comparing representation families (SF-S3-MR3).
+
+    One window, one detrend, one warm-up, one stride — for every family. The
+    comparison the sprint exists to run is only meaningful if the arms differ in
+    exactly one respect, so there is deliberately no per-family preprocessing
+    setting to get wrong.
+    """
+
+    enabled: bool = False
+    window: SpectralWindow = Field(default_factory=SpectralWindow)
+    descriptors: DescriptorConfig = Field(default_factory=DescriptorConfig)
+    families: list[RepresentationFamily] = Field(
+        default_factory=_default_representation_families, min_length=1
+    )
+    #: Adaptive decomposition is orders of magnitude costlier than an FFT, so
+    #: per-window families are evaluated every `stride` bars. Skipped bars stay
+    #: NaN — an honest gap, never a forward fill.
+    stride: int = Field(default=1, ge=1, le=252)
+    wavelet: Literal["haar", "db2"] = "db2"
+    dwt_levels: int = Field(default=3, ge=1, le=10)
+    n_reported_modes: int = Field(default=4, ge=1, le=20)
+    max_modes: int = Field(default=8, ge=1, le=20)
+    sd_tolerance: float = Field(default=0.2, gt=0.0, le=1.0)
+    max_sift_iterations: int = Field(default=100, ge=1, le=2_000)
+    vmd_alpha: float = Field(default=2000.0, gt=0.0, le=1_000_000.0)
+    vmd_tau: float = Field(default=0.0, ge=0.0, le=10.0)
+    vmd_max_iterations: int = Field(default=500, ge=1, le=5_000)
+
+    @model_validator(mode="after")
+    def _validated(self) -> RepresentationConfig:
+        if len(set(self.families)) != len(self.families):
+            raise ValueError("families must be unique")
+        if "wavelet" in self.families and self.window.length % (2**self.dwt_levels) != 0:
+            raise ValueError(
+                f"window length {self.window.length} must be divisible by "
+                f"2**dwt_levels ({2**self.dwt_levels}) for an even filter-bank cascade"
+            )
+        if self.n_reported_modes > self.max_modes:
+            raise ValueError("n_reported_modes cannot exceed max_modes")
+        return self
+
+
 class FeatureConfig(_Base):
     """Feature-engineering configuration."""
 
@@ -437,6 +488,7 @@ class FeatureConfig(_Base):
     dropna: bool = True
     spectral: SpectralConfig = Field(default_factory=SpectralConfig)
     time_frequency: TimeFrequencyConfig = Field(default_factory=TimeFrequencyConfig)
+    representations: RepresentationConfig = Field(default_factory=RepresentationConfig)
 
 
 class FeatureStoreConfig(_Base):
