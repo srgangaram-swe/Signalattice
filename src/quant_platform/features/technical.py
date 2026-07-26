@@ -18,8 +18,13 @@ TRADING_DAYS = 252
 
 
 def simple_returns(price: pd.Series, periods: int = 1) -> pd.Series:
-    """Simple percentage return over ``periods`` bars."""
-    return price.pct_change(periods=periods)
+    """Simple percentage return over ``periods`` bars.
+
+    Missing endpoint prices propagate as missing returns. Silent forward-fill
+    would manufacture a zero return at a gap and a multi-bar return after it,
+    obscuring stale or unavailable market data.
+    """
+    return price.pct_change(periods=periods, fill_method=None)
 
 
 def log_returns(price: pd.Series, periods: int = 1) -> pd.Series:

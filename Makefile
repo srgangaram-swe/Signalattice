@@ -27,28 +27,32 @@ install-all: ## Install every optional integration, including PyTorch
 
 .PHONY: lint
 lint: ## Run ruff + black --check
-	$(BIN)/ruff check src tests scripts
-	$(BIN)/black --check src tests scripts
+	$(BIN)/python -m ruff check src tests scripts
+	$(BIN)/python -m black --check src tests scripts
 
 .PHONY: format
 format: ## Auto-format with ruff --fix and black
-	$(BIN)/ruff check --fix src tests scripts
-	$(BIN)/black src tests scripts
+	$(BIN)/python -m ruff check --fix src tests scripts
+	$(BIN)/python -m black src tests scripts
 
 .PHONY: typecheck
 typecheck: ## Run mypy static type checks
-	$(BIN)/mypy src
+	$(BIN)/python -m mypy src
 
 .PHONY: quality
-quality: lint typecheck ## Run all static quality gates
+quality: lock-check lint typecheck ## Run all static quality gates
+
+.PHONY: lock-check
+lock-check: ## Verify the committed universal dependency resolution
+	$(BIN)/uv lock --check
 
 .PHONY: test
 test: ## Run the test suite (skips network tests)
-	$(BIN)/pytest -m "not network"
+	$(BIN)/python -m pytest -m "not network"
 
 .PHONY: test-cov
 test-cov: ## Run tests with coverage report
-	$(BIN)/pytest -m "not network" --cov=quant_platform --cov-branch \
+	$(BIN)/python -m pytest -m "not network" --cov=quant_platform --cov-branch \
 		--cov-report=term-missing --cov-report=xml --cov-fail-under=80
 
 .PHONY: build
@@ -85,6 +89,13 @@ pipeline: ## Run the full end-to-end pipeline using $(CONFIG)
 .PHONY: demo
 demo: ## Run a fully offline demo (synthetic data) end-to-end
 	$(BIN)/signalattice run-full-pipeline --config configs/synthetic.yaml
+
+.PHONY: benchmark-feature-store
+benchmark-feature-store: ## Regenerate synthetic feature-store JSON and Seaborn evidence
+	$(BIN)/python scripts/benchmark_feature_store.py \
+		--output-json docs/benchmarks/feature_store_2026-07-25.json \
+		--output-plot docs/assets/feature_store_latency_2026-07-25.png \
+		--output-example-manifest docs/examples/feature_store_manifest.json
 
 .PHONY: clean
 clean: ## Remove caches and build artifacts

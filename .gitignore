@@ -54,6 +54,7 @@ data/processed/*
 data/external/*
 data/vendor/*
 data/signal-foundry-bundles/*
+data/feature-store/*
 !data/**/.gitkeep
 
 # Generated reports & figures (keep example outputs committed selectively)

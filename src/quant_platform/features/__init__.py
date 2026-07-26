@@ -11,6 +11,7 @@ Public API:
 - :func:`get_contract`, :func:`list_contracts`, :func:`contract_metadata_frame`
   — introspect the conventional-feature contract registry.
 - individual indicator functions in :mod:`quant_platform.features.technical`.
+- immutable registry, quality, feature-store, and resumable backfill contracts.
 """
 
 from __future__ import annotations
@@ -38,25 +39,36 @@ from quant_platform.features.pipeline import (
     build_features,
     feature_columns,
 )
+from quant_platform.features.registry import FeatureRegistry, FeatureSpec
+from quant_platform.features.store import (
+    FeatureMaterializationRequest,
+    FeatureOutputContract,
+    FeatureStore,
+)
 
 __all__ = [
-    "build_features",
-    "feature_columns",
-    "FEATURE_PREFIX",
-    "build_contract_features",
-    "contract_metadata_frame",
-    "default_contracts",
-    "statistical_contracts",
-    "get_contract",
-    "list_contracts",
-    "validate_contract_panel",
     "CONTRACT_PREFIX",
     "CONTRACT_REGISTRY",
+    "FEATURE_PREFIX",
     "FeatureContract",
     "FeatureFamily",
+    "FeatureMaterializationRequest",
+    "FeatureOutputContract",
+    "FeatureRegistry",
+    "FeatureSpec",
+    "FeatureStore",
     "MissingDataPolicy",
     "NumericalRange",
     "Scope",
     "TemporalAvailability",
     "Unit",
+    "build_contract_features",
+    "build_features",
+    "contract_metadata_frame",
+    "default_contracts",
+    "feature_columns",
+    "get_contract",
+    "list_contracts",
+    "statistical_contracts",
+    "validate_contract_panel",
 ]

@@ -49,6 +49,55 @@ def _panel() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _universe() -> pd.DataFrame:
+    observed_at = pd.Timestamp("2026-07-23T00:00:00Z")
+    return pd.DataFrame(
+        {
+            "membership_id": ["atlas-aaa", "atlas-spy"],
+            "universe_id": ["ATLAS", "ATLAS"],
+            "instrument_id": ["AAA", "SPY"],
+            "ticker": ["AAA", "SPY"],
+            "effective_at": pd.to_datetime(
+                ["2023-12-01T00:00:00Z", "2023-12-01T00:00:00Z"], utc=True
+            ),
+            "available_at": pd.to_datetime(
+                ["2023-12-01T01:00:00Z", "2023-12-01T01:00:00Z"], utc=True
+            ),
+            "observed_at": [observed_at, observed_at],
+            "provider_updated_at": pd.to_datetime(
+                ["2023-12-01T00:30:00Z", "2023-12-01T00:30:00Z"], utc=True
+            ),
+            "is_member": [True, True],
+            "reason": ["synthetic inclusion", "synthetic inclusion"],
+            "source": ["synthetic_provider_fixture", "synthetic_provider_fixture"],
+            "source_table": ["TEST/UNIVERSE", "TEST/UNIVERSE"],
+        }
+    )
+
+
+def _corporate_actions() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "action_id": ["aaa-dividend"],
+            "instrument_id": ["AAA"],
+            "ticker": ["AAA"],
+            "action_type": ["cash_dividend"],
+            "effective_at": pd.to_datetime(["2024-01-03T14:30:00Z"], utc=True),
+            "available_at": pd.to_datetime(["2024-01-02T22:00:00Z"], utc=True),
+            "observed_at": pd.to_datetime(["2026-07-23T00:00:00Z"], utc=True),
+            "provider_updated_at": pd.to_datetime(["2024-01-02T22:30:00Z"], utc=True),
+            "cash_amount": [0.25],
+            "split_ratio": [None],
+            "currency": ["USD"],
+            "old_ticker": [""],
+            "new_ticker": [""],
+            "adjustment_state": ["synthetic_fixture"],
+            "source": ["synthetic_provider_fixture"],
+            "source_table": ["TEST/ACTIONS"],
+        }
+    )
+
+
 def main() -> None:
     bundle = export_signal_foundry_bundle(
         _panel(),
@@ -70,10 +119,12 @@ def main() -> None:
             "observations_redistributable": True,
         },
         producer_git_sha="0" * 40,
+        universe=_universe(),
+        corporate_actions=_corporate_actions(),
     )
     pointer = OUTPUT_ROOT / "current.json"
     pointer.write_text(
-        json.dumps({"schema_version": "1.0.0", "bundle_id": bundle.name}, sort_keys=True) + "\n",
+        json.dumps({"schema_version": "1.1.0", "bundle_id": bundle.name}, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     print(bundle)

@@ -99,6 +99,12 @@ assumption unless the selected table supplies an authoritative publication times
 The adapter does not by itself remove survivorship, historical-revision, constituent, or
 corporate-action limitations. Its redacted source manifest records these gaps.
 
+The local feature store carries those source limitations forward into every immutable
+materialization. Its quality SLAs can reject missing tickers, duplicate keys, non-finite
+features, excessive business-date gaps, staleness, and configured distribution drift.
+Passing these checks proves the declared mechanics and thresholds only; it cannot supply
+missing point-in-time source evidence or demonstrate predictive value.
+
 ## Appropriate use
 
 Use synthetic data for deterministic engineering validation and public data for explicitly
