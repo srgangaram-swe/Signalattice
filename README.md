@@ -81,6 +81,9 @@ Key capabilities include:
 - proper probability scores, reliability tables, Brier decomposition, expected calibration
   error, ROC and precision-recall analysis, selective prediction, prediction-decile returns,
   fold stability, and date-block bootstrap intervals;
+- causal local-level and dynamic-linear Kalman references, fixed-parameter EWMA/GARCH
+  variance forecasts, Gaussian interval diagnostics, and conditioned OAS covariance
+  estimation with deterministic simulation-recovery evidence;
 - long-only and dollar-neutral research portfolios with probability or quantile selection,
   no-trade bands, position and gross-exposure limits, causal volatility targeting, costs,
   and explicit execution lag;
