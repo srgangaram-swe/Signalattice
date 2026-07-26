@@ -27,6 +27,15 @@ def test_log_and_simple_returns_close(price_series):
     np.testing.assert_allclose(log.dropna(), np.log1p(simple.dropna()), rtol=1e-6)
 
 
+def test_simple_returns_propagate_missing_endpoints() -> None:
+    price = pd.Series([100.0, np.nan, 102.0, 103.0])
+
+    returns = ta.simple_returns(price)
+
+    assert returns.iloc[:3].isna().all()
+    assert returns.iloc[3] == pytest.approx(103.0 / 102.0 - 1.0)
+
+
 def test_rsi_bounded(price_series):
     r = ta.rsi(price_series, 14).dropna()
     assert r.between(0, 100).all()
