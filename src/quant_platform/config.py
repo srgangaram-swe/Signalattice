@@ -54,14 +54,19 @@ class SyntheticConfig(_Base):
 
 
 class NasdaqDataLinkConfig(_Base):
-    """Bounded Nasdaq Data Link table-API configuration.
+    """Bounded Nasdaq Data Link table or time-series API configuration.
 
     The API credential is deliberately absent. Runtime code resolves only the
     ``NASDAQ_DATA_LINK_API_KEY`` environment variable so serialized
     configurations and run manifests cannot contain the secret.
     """
 
+    api_kind: Literal["tables", "time_series"] = "tables"
     table: str = "SHARADAR/SEP"
+    adjustment: Literal["adjusted", "unadjusted"] = "adjusted"
+    currency: str = "USD"
+    exchange_calendar: str = "XNYS"
+    market_close_utc_hour: int = Field(default=21, ge=0, le=23)
     cache_mode: Literal["prefer_cache", "network", "cache_only"] = "prefer_cache"
     cache_dir: str = "data/vendor/nasdaq-data-link"
     requests_per_minute: int = Field(default=30, ge=1, le=300)
@@ -77,9 +82,42 @@ class NasdaqDataLinkConfig(_Base):
     def _validate_table(cls, value: str) -> str:
         normalized = value.strip().upper()
         parts = normalized.split("/")
-        if len(parts) != 2 or not all(part.replace("_", "").isalnum() for part in parts):
-            raise ValueError("`data.nasdaq_data_link.table` must be DATABASE/TABLE")
+        if not parts or not all(part.replace("_", "").isalnum() for part in parts):
+            raise ValueError("`data.nasdaq_data_link.table` contains an invalid provider code")
         return normalized
+
+    @field_validator("currency")
+    @classmethod
+    def _validate_currency(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if len(normalized) != 3 or not normalized.isalpha():
+            raise ValueError("`data.nasdaq_data_link.currency` must be a three-letter code")
+        return normalized
+
+    @field_validator("exchange_calendar")
+    @classmethod
+    def _validate_exchange_calendar(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if len(normalized) != 4 or not normalized.isalnum():
+            raise ValueError(
+                "`data.nasdaq_data_link.exchange_calendar` must be a four-character code"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_api_product_code(self) -> NasdaqDataLinkConfig:
+        parts = self.table.split("/")
+        expected_parts = 2 if self.api_kind == "tables" else 1
+        if len(parts) != expected_parts:
+            expected = "DATABASE/TABLE" if self.api_kind == "tables" else "DATABASE"
+            raise ValueError(
+                f"`data.nasdaq_data_link.table` must be {expected} when api_kind={self.api_kind!r}"
+            )
+        if self.api_kind == "tables" and self.adjustment != "adjusted":
+            raise ValueError(
+                "`data.nasdaq_data_link.adjustment` is only configurable for time_series"
+            )
+        return self
 
     @field_validator("cache_dir")
     @classmethod
@@ -164,6 +202,34 @@ class FeatureConfig(_Base):
     drawdown_window: int = 252
     cross_sectional: bool = True
     dropna: bool = True
+
+
+class FeatureStoreConfig(_Base):
+    """Local immutable feature-store and quality policy."""
+
+    enabled: bool = True
+    root_dir: str = "data/feature-store"
+    partition_by: Literal["year", "month"] = "year"
+    max_query_rows: int = Field(default=5_000_000, ge=1, le=100_000_000)
+    max_query_columns: int = Field(default=1_000, ge=1, le=10_000)
+    max_workers: int = Field(default=2, ge=1, le=32)
+    max_attempts: int = Field(default=2, ge=1, le=10)
+    max_rows_per_partition: int = Field(default=5_000_000, ge=1, le=100_000_000)
+    max_missing_fraction: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_business_day_gap: int = Field(default=5, ge=1, le=366)
+    max_staleness_days: int = Field(default=7, ge=0, le=3_650)
+    min_drift_samples: int = Field(default=100, ge=20, le=10_000_000)
+    max_ks_statistic: float = Field(default=0.35, gt=0.0, le=1.0)
+    max_psi: float = Field(default=0.25, gt=0.0, le=100.0)
+    psi_bins: int = Field(default=10, ge=4, le=100)
+
+    @field_validator("root_dir")
+    @classmethod
+    def _safe_root_dir(cls, value: str) -> str:
+        path = Path(value)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError("`feature_store.root_dir` must be a safe relative path")
+        return value
 
 
 class CVConfig(_Base):
@@ -370,6 +436,7 @@ class AppConfig(_Base):
     project: ProjectConfig = Field(default_factory=ProjectConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     features: FeatureConfig = Field(default_factory=FeatureConfig)
+    feature_store: FeatureStoreConfig = Field(default_factory=FeatureStoreConfig)
     model: ModelConfig = Field(default_factory=ModelConfig)
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)

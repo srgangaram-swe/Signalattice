@@ -108,6 +108,29 @@ def test_nasdaq_data_link_config_is_strict_and_has_no_secret_field():
     assert "api_key" not in cfg.data.nasdaq_data_link.model_dump()
 
 
+def test_nasdaq_time_series_config_has_explicit_market_semantics():
+    cfg = AppConfig.model_validate(
+        {
+            "data": {
+                "source": "nasdaq_data_link",
+                "nasdaq_data_link": {
+                    "api_kind": "time_series",
+                    "table": "xdus",
+                    "adjustment": "unadjusted",
+                    "currency": "eur",
+                    "exchange_calendar": "xdus",
+                    "market_close_utc_hour": 16,
+                },
+            }
+        }
+    )
+
+    assert cfg.data.nasdaq_data_link.table == "XDUS"
+    assert cfg.data.nasdaq_data_link.currency == "EUR"
+    assert cfg.data.nasdaq_data_link.exchange_calendar == "XDUS"
+    assert cfg.data.nasdaq_data_link.adjustment == "unadjusted"
+
+
 @pytest.mark.parametrize(
     ("path", "expected_tickers", "expected_benchmark"),
     [
@@ -129,10 +152,42 @@ def test_committed_sep_profiles_use_equity_universes(path, expected_tickers, exp
     assert cfg.data.allow_synthetic_fallback is False
 
 
+def test_committed_xdus_profile_is_bounded_engineering_data():
+    cfg = load_config("configs/nasdaq_xdus_sample.yaml")
+
+    assert cfg.data.source == "nasdaq_data_link"
+    assert cfg.data.nasdaq_data_link.api_kind == "time_series"
+    assert cfg.data.nasdaq_data_link.table == "XDUS"
+    assert cfg.data.nasdaq_data_link.currency == "EUR"
+    assert cfg.data.nasdaq_data_link.exchange_calendar == "XDUS"
+    assert cfg.data.nasdaq_data_link.max_requests == len(cfg.data.tickers) == 5
+    assert cfg.data.nasdaq_data_link.max_retries == 0
+    assert cfg.data.end == "2018-11-30"
+    assert cfg.data.allow_synthetic_fallback is False
+
+
+def test_committed_wiki_profile_is_bounded_static_engineering_data():
+    cfg = load_config("configs/nasdaq_wiki_sample.yaml")
+
+    assert cfg.data.source == "nasdaq_data_link"
+    assert cfg.data.nasdaq_data_link.api_kind == "tables"
+    assert cfg.data.nasdaq_data_link.table == "WIKI/PRICES"
+    assert cfg.data.nasdaq_data_link.max_requests == 3
+    assert cfg.data.nasdaq_data_link.max_retries == 0
+    assert cfg.data.end == "2018-03-27"
+    assert len(cfg.data.tickers) == 10
+    assert cfg.data.allow_synthetic_fallback is False
+
+
 @pytest.mark.parametrize(
     "nasdaq_config",
     [
         {"table": "not-a-table"},
+        {"api_kind": "time_series", "table": "SHARADAR/SEP"},
+        {"api_kind": "tables", "table": "XDUS"},
+        {"api_kind": "tables", "adjustment": "unadjusted"},
+        {"currency": "US"},
+        {"exchange_calendar": "TOO-LONG"},
         {"cache_dir": "../escape"},
         {"requests_per_minute": 0},
         {"max_requests": 0},

@@ -1,0 +1,71 @@
+{
+  "adjustment_state": [
+    "provider_adjusted_close_unadjusted_ohlc"
+  ],
+  "availability_policy": {
+    "available_at": "effective_at plus 12 hours; policy assumption, not a provider publication timestamp",
+    "effective_at": "market date at configured 21:00 UTC close"
+  },
+  "contains_api_key": false,
+  "date_max": "2018-03-27",
+  "date_min": "2013-01-02",
+  "licensed_observations_must_remain_local": true,
+  "manifest_version": 2,
+  "page_count": 2,
+  "page_sha256": [
+    "597c5591cde34339cc4c946d4d33db99a15f595fb94fb9498981bfb0e586b6bc",
+    "fcec8156f832c383ffd7698a09954bfa4d856391ecb97b9e73af4b4dbe1633ba"
+  ],
+  "point_in_time_limits": {
+    "corporate_actions_complete": false,
+    "historical_revisions_complete": false,
+    "universe_membership_point_in_time": false
+  },
+  "provider": "nasdaq_data_link",
+  "provider_metadata": [],
+  "request": {
+    "adjustment": "adjusted",
+    "api_kind": "tables",
+    "currency": "USD",
+    "end": "2018-03-27",
+    "exchange_calendar": "XNYS",
+    "market_close_utc_hour": 21,
+    "page_size": 10000,
+    "provider": "nasdaq_data_link",
+    "start": "2013-01-02",
+    "table": "WIKI/PRICES",
+    "tickers": [
+      "AAPL",
+      "CAT",
+      "IBM",
+      "JNJ",
+      "JPM",
+      "KO",
+      "MSFT",
+      "PG",
+      "WMT",
+      "XOM"
+    ]
+  },
+  "request_budget": {
+    "maximum": 3,
+    "requests_per_minute": 10,
+    "used": 2
+  },
+  "request_hash": "c94da24f16cc632722d73488cfebb2efb6198ee660a703304eb5c7a8594dc130",
+  "retrieved_at": "2026-07-25T05:07:30.466983Z",
+  "row_count": 13169,
+  "snapshot_hash": "c3e99355476ddc7370b9921b8d9495cf0e62ed52f04c83f68ac4ca9ad8bcc96d",
+  "tickers": [
+    "AAPL",
+    "CAT",
+    "IBM",
+    "JNJ",
+    "JPM",
+    "KO",
+    "MSFT",
+    "PG",
+    "WMT",
+    "XOM"
+  ]
+}

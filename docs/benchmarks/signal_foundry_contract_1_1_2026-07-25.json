@@ -1,0 +1,78 @@
+{
+  "benchmark": "signal_foundry_contract",
+  "bundle_bytes": 549225,
+  "filtered_rows": 33408,
+  "limitations": [
+    "single local process",
+    "synthetic deterministic data",
+    "warm filesystem state is not controlled",
+    "not a provider-network benchmark"
+  ],
+  "median_rows_per_export_second": 60135.282436938985,
+  "pandas": "3.0.3",
+  "peak_tracemalloc_bytes": 24319229,
+  "platform": "macOS-15.5-arm64-arm-64bit-Mach-O",
+  "pyarrow": "24.0.0",
+  "python": "3.13.11",
+  "raw_samples": [
+    {
+      "as_of_read_seconds": 0.8291154160106089,
+      "export_seconds": 0.8737253330036765,
+      "validate_seconds": 0.4117809580056928
+    },
+    {
+      "as_of_read_seconds": 0.7976102079992415,
+      "export_seconds": 0.7977312500006519,
+      "validate_seconds": 0.3935992500046268
+    },
+    {
+      "as_of_read_seconds": 0.8028438329929486,
+      "export_seconds": 0.7964302909967955,
+      "validate_seconds": 0.398499749993789
+    },
+    {
+      "as_of_read_seconds": 0.7965588340011891,
+      "export_seconds": 0.8012018750014249,
+      "validate_seconds": 0.3941306250053458
+    },
+    {
+      "as_of_read_seconds": 0.8016374589933548,
+      "export_seconds": 0.7982002919889055,
+      "validate_seconds": 0.39551970799220726
+    },
+    {
+      "as_of_read_seconds": 0.8030885000043781,
+      "export_seconds": 0.8030877080018399,
+      "validate_seconds": 0.3972910000011325
+    },
+    {
+      "as_of_read_seconds": 0.8135104589891853,
+      "export_seconds": 0.7957275840017246,
+      "validate_seconds": 0.3937894169939682
+    }
+  ],
+  "repetitions": 7,
+  "rows": 48000,
+  "schema_version": "1.1.0",
+  "tickers": 32,
+  "timing_seconds": {
+    "as_of_read": {
+      "max": 0.8291154160106089,
+      "median": 0.8028438329929486,
+      "min": 0.7965588340011891,
+      "p95_nearest_rank": 0.8291154160106089
+    },
+    "export": {
+      "max": 0.8737253330036765,
+      "median": 0.7982002919889055,
+      "min": 0.7957275840017246,
+      "p95_nearest_rank": 0.8737253330036765
+    },
+    "validate": {
+      "max": 0.4117809580056928,
+      "median": 0.39551970799220726,
+      "min": 0.3935992500046268,
+      "p95_nearest_rank": 0.4117809580056928
+    }
+  }
+}

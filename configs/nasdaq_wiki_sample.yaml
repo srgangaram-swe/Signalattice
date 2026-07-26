@@ -1,0 +1,41 @@
+# Bounded public-domain U.S. equity history for engineering and backtest plumbing.
+#
+# WIKI/PRICES is static historical data ending in March 2018. It is useful for
+# repeatable integration tests and research-pipeline development, but it is not
+# point-in-time universe evidence, current market data, or live-trading input.
+
+project:
+  name: signal_foundry_wiki_engineering_sample
+  seed: 42
+  description: "Bounded public-domain U.S. equity history for pipeline validation."
+
+data:
+  source: nasdaq_data_link
+  allow_synthetic_fallback: false
+  tickers: [AAPL, MSFT, IBM, JPM, XOM, JNJ, PG, KO, CAT, WMT]
+  benchmark: AAPL
+  start: "2013-01-02"
+  end: "2018-03-27"
+  raw_dir: data/raw/wiki-sample
+  processed_dir: data/processed/wiki-sample
+  price_field: adj_close
+  min_observations: 756
+  nasdaq_data_link:
+    api_kind: tables
+    table: WIKI/PRICES
+    adjustment: adjusted
+    currency: USD
+    exchange_calendar: XNYS
+    market_close_utc_hour: 21
+    cache_mode: prefer_cache
+    cache_dir: data/vendor/nasdaq-data-link-wiki
+    requests_per_minute: 10
+    max_requests: 3
+    page_size: 10000
+    timeout_seconds: 30
+    max_retries: 0
+    retry_backoff_seconds: 1
+    availability_lag_hours: 12
+
+tracking:
+  backend: none
