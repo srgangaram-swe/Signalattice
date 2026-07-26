@@ -9,6 +9,9 @@ Public API:
 - immutable registry, quality, feature-store, and resumable backfill contracts.
 - :func:`build_spectral_features` — opt-in causal spectral/time-frequency
   descriptors (SF-S3-MR1), disabled unless explicitly configured.
+- :func:`build_time_frequency_tensor` and :class:`TimeFrequencyStore` —
+  opt-in spectrogram/scalogram tensors and their content-addressed store
+  (SF-S3-MR2); tensors never join the feature matrix.
 """
 
 from __future__ import annotations
@@ -30,6 +33,13 @@ from quant_platform.features.store import (
     FeatureOutputContract,
     FeatureStore,
 )
+from quant_platform.features.time_frequency import (
+    TimeFrequencyMetadata,
+    TimeFrequencyTensor,
+    build_time_frequency_tensor,
+    normalize_tensor,
+)
+from quant_platform.features.time_frequency_store import TimeFrequencyStore
 
 __all__ = [
     "FEATURE_PREFIX",
@@ -39,9 +49,14 @@ __all__ = [
     "FeatureRegistry",
     "FeatureSpec",
     "FeatureStore",
+    "TimeFrequencyMetadata",
+    "TimeFrequencyStore",
+    "TimeFrequencyTensor",
     "build_features",
     "build_spectral_features",
+    "build_time_frequency_tensor",
     "feature_columns",
+    "normalize_tensor",
     "spectral_column_names",
     "spectral_feature_registry",
 ]
