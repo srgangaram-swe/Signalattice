@@ -363,6 +363,62 @@ class SpectralConfig(_Base):
         return self
 
 
+class TimeFrequencyConfig(_Base):
+    """Opt-in configuration for time-frequency tensors (SF-S3-MR2).
+
+    A spectrogram or scalogram is a *representation*, not a feature: it is a
+    dense tensor per observation rather than a scalar column, so it is built,
+    cached, and rendered separately from the ``f_spec_*`` descriptor columns and
+    never enters the feature matrix.
+
+    Disabled by default. Enabling it adds no columns to any existing artifact,
+    and disabling it again leaves prior evidence intact.
+    """
+
+    enabled: bool = False
+    representation: Literal["spectrogram", "scalogram"] = "spectrogram"
+    window: SpectralWindow = Field(default_factory=SpectralWindow)
+    channels: list[SpectralChannel] = Field(
+        default_factory=_default_spectral_channels, min_length=1
+    )
+    volatility_window: int = Field(default=21, ge=2, le=1024)
+    beta_window: int = Field(default=63, ge=2, le=1024)
+    #: Scalogram target periods in bars, converted to Morlet scales.
+    scalogram_periods: list[float] = Field(
+        default_factory=lambda: [3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0], min_length=2
+    )
+    morlet_omega0: float = Field(default=6.0, ge=3.0, le=20.0)
+    normalization: Literal["none", "train_log_zscore"] = "train_log_zscore"
+    #: Refusal thresholds on the materialized tensor, not tuning knobs.
+    max_tensor_cells: int = Field(default=200_000_000, ge=1_000, le=4_000_000_000)
+    max_object_bytes: int = Field(default=2_000_000_000, ge=1_000, le=64_000_000_000)
+    cache_dir: str = "data/time-frequency"
+
+    @field_validator("cache_dir")
+    @classmethod
+    def _safe_cache_dir(cls, value: str) -> str:
+        path = Path(value)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError("`time_frequency.cache_dir` must be a safe relative path")
+        return value
+
+    @model_validator(mode="after")
+    def _validated(self) -> TimeFrequencyConfig:
+        if len(set(self.channels)) != len(self.channels):
+            raise ValueError("channels must be unique")
+        if any(not math.isfinite(period) or period <= 2.0 for period in self.scalogram_periods):
+            raise ValueError(
+                "scalogram_periods must be finite and above the Nyquist period of 2 bars"
+            )
+        if len(set(self.scalogram_periods)) != len(self.scalogram_periods):
+            raise ValueError("scalogram_periods must be unique")
+        if self.scalogram_periods != sorted(self.scalogram_periods):
+            # A sorted axis is part of the tensor contract: an unordered scale
+            # axis makes a rendered scalogram silently unreadable.
+            raise ValueError("scalogram_periods must be sorted ascending")
+        return self
+
+
 class FeatureConfig(_Base):
     """Feature-engineering configuration."""
 
@@ -380,6 +436,7 @@ class FeatureConfig(_Base):
     cross_sectional: bool = True
     dropna: bool = True
     spectral: SpectralConfig = Field(default_factory=SpectralConfig)
+    time_frequency: TimeFrequencyConfig = Field(default_factory=TimeFrequencyConfig)
 
 
 class FeatureStoreConfig(_Base):
