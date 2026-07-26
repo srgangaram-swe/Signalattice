@@ -10,13 +10,41 @@ import pandas as pd
 from quant_platform.config import AppConfig
 from quant_platform.data.schema import DATE_COL, TICKER_COL
 from quant_platform.features.quality import FeatureQualityPolicy
-from quant_platform.features.registry import conventional_feature_registry, semantic_hash
+from quant_platform.features.registry import (
+    FeatureRegistry,
+    conventional_feature_registry,
+    semantic_hash,
+)
+from quant_platform.features.spectral import spectral_feature_registry
 from quant_platform.features.store import (
     DatasetLineage,
     FeatureMaterializationRequest,
     FeatureOutputContract,
 )
 from quant_platform.utils import hash_dataframe
+
+
+def _configured_registry(config: AppConfig) -> FeatureRegistry:
+    """Return the registry for every feature family the configuration enables.
+
+    The spectral family is appended only when it is switched on, so a run with
+    the capability disabled produces byte-identical lineage to one from before
+    the capability existed.
+    """
+    specs = list(
+        conventional_feature_registry(
+            config.features,
+            price_field=config.data.price_field,
+        ).specs
+    )
+    if config.features.spectral.enabled:
+        specs.extend(
+            spectral_feature_registry(
+                config.features.spectral,
+                dropna=config.features.dropna,
+            ).specs
+        )
+    return FeatureRegistry(specs)
 
 
 def build_pipeline_materialization_request(
@@ -103,10 +131,7 @@ def build_pipeline_materialization_request(
     )
     return FeatureMaterializationRequest.create(
         lineage=lineage,
-        registry=conventional_feature_registry(
-            config.features,
-            price_field=config.data.price_field,
-        ),
+        registry=_configured_registry(config),
         output_contract=FeatureOutputContract(
             benchmark=config.data.benchmark,
             price_field=config.data.price_field,

@@ -36,6 +36,7 @@ from quant_platform.evaluation import (
 from quant_platform.features.backfill import BackfillOrchestrator, BackfillPartition, BackfillPlan
 from quant_platform.features.integration import build_pipeline_materialization_request
 from quant_platform.features.pipeline import build_features, feature_columns
+from quant_platform.features.spectral import build_spectral_features
 from quant_platform.features.store import FeatureStore
 from quant_platform.logging_utils import get_logger
 from quant_platform.models.baseline import baseline_signal
@@ -179,6 +180,7 @@ class Pipeline:
             price_field=self.config.data.price_field,
             forward_horizon=self.config.model.forward_horizon,
         )
+        feats = self._attach_spectral_features(panel, feats)
         if self.config.feature_store.enabled:
             registered = tuple(feature.name for feature in request.features)
             produced = tuple(sorted(feature_columns(feats)))
@@ -202,6 +204,43 @@ class Pipeline:
             logger.warning("Feature-store persistence is explicitly disabled")
         self.art.features = feats
         return feats
+
+    def _attach_spectral_features(
+        self, panel: pd.DataFrame, features: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Join opt-in causal spectral features onto the conventional matrix.
+
+        Spectral descriptors are computed from the **full** panel rather than
+        the already-filtered feature frame, because their causal windows need
+        the early history that ``build_features`` drops as conventional warm-up.
+        The join is then an explicit ``(date, ticker)`` merge validated as
+        one-to-one, so a duplicated observation surfaces as an error instead of
+        quietly multiplying rows.
+        """
+        spectral_config = self.config.features.spectral
+        if not spectral_config.enabled:
+            return features
+        spectral = build_spectral_features(
+            panel,
+            spectral_config,
+            benchmark=self.config.data.benchmark,
+        )
+        keyed = pd.concat([panel[[DATE_COL, TICKER_COL]], spectral], axis=1)
+        merged = features.merge(
+            keyed,
+            on=[DATE_COL, TICKER_COL],
+            how="left",
+            validate="one_to_one",
+        )
+        if self.config.features.dropna:
+            merged = merged.dropna(subset=list(spectral.columns)).reset_index(drop=True)
+        logger.info(
+            "Attached %d causal spectral features (%d -> %d rows after spectral warm-up)",
+            len(spectral.columns),
+            len(features),
+            len(merged),
+        )
+        return merged
 
     def _ensure_features(self) -> pd.DataFrame:
         if self.art.features is None:

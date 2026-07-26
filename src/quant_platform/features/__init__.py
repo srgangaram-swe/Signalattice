@@ -12,6 +12,8 @@ Public API:
   — introspect the conventional-feature contract registry.
 - individual indicator functions in :mod:`quant_platform.features.technical`.
 - immutable registry, quality, feature-store, and resumable backfill contracts.
+- :func:`build_spectral_features` — opt-in causal spectral/time-frequency
+  descriptors (SF-S3-MR1), disabled unless explicitly configured.
 """
 
 from __future__ import annotations
@@ -41,6 +43,12 @@ from quant_platform.features.pipeline import (
     feature_columns,
 )
 from quant_platform.features.registry import FeatureRegistry, FeatureSpec
+from quant_platform.features.spectral import (
+    SPECTRAL_PREFIX,
+    build_spectral_features,
+    spectral_column_names,
+    spectral_feature_registry,
+)
 from quant_platform.features.store import (
     FeatureMaterializationRequest,
     FeatureOutputContract,
@@ -51,6 +59,7 @@ __all__ = [
     "CONTRACT_PREFIX",
     "CONTRACT_REGISTRY",
     "FEATURE_PREFIX",
+    "SPECTRAL_PREFIX",
     "FeatureContract",
     "FeatureFamily",
     "FeatureMaterializationRequest",
@@ -65,12 +74,15 @@ __all__ = [
     "Unit",
     "build_contract_features",
     "build_features",
+    "build_spectral_features",
     "contract_metadata_frame",
     "default_contracts",
     "feature_columns",
     "get_contract",
     "liquidity_contracts",
     "list_contracts",
+    "spectral_column_names",
+    "spectral_feature_registry",
     "statistical_contracts",
     "validate_contract_panel",
 ]
