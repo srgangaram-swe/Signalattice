@@ -66,6 +66,8 @@ flowchart LR
 Key capabilities include:
 
 - typed, fail-fast configuration with deterministic seeds and config-aware data caches;
+- a typed feature registry, immutable content-addressed DuckDB/Parquet store, quality and
+  drift gates, verified predicate reads, and resumable bounded backfills;
 - explicit market-data source identity—synthetic data is never silently substituted unless
   the run opts into that behavior;
 - ticker-local trailing features and whole-date train/test boundaries for panel data;
@@ -236,6 +238,7 @@ tests/                      unit and integration contracts
 - [Architecture](docs/architecture.md)
 - [Nasdaq Data Link ingestion boundary](docs/nasdaq_data_link.md)
 - [Signal Foundry dataset contract](docs/signal_foundry_contract.md)
+- [Feature registry, immutable store, and resumable backfills](docs/feature_store.md)
 - [Methodology](docs/methodology.md)
 - [Model card](docs/model_card.md)
 - [Data card](docs/data_card.md)
@@ -254,8 +257,9 @@ tests/                      unit and integration contracts
   trail.
 - The capacity calculation is a trailing dollar-volume participation proxy, not an
   execution simulator.
-- The latency benchmark measures warm local model inference, not feed handling, feature
-  materialization, network transit, risk checks, or order acknowledgement.
+- The latency evidence covers warm local inference and a separate local synthetic
+  feature-store workload, not feed handling, provider transit, distributed serving, risk
+  checks, or order acknowledgement.
 - The current research harness does not establish external replication, paper trading, or
   live post-trade attribution.
 
