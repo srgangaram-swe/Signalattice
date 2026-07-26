@@ -239,6 +239,7 @@ tests/                      unit and integration contracts
 - [Nasdaq Data Link ingestion boundary](docs/nasdaq_data_link.md)
 - [Signal Foundry dataset contract](docs/signal_foundry_contract.md)
 - [Feature registry, immutable store, and resumable backfills](docs/feature_store.md)
+- [Causal spectral transforms and descriptors](docs/spectral_features.md)
 - [Methodology](docs/methodology.md)
 - [Model card](docs/model_card.md)
 - [Data card](docs/data_card.md)
