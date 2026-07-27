@@ -122,3 +122,15 @@ Regression runs report MAE, RMSE, R-squared, and sign agreement. The
 [model card](model_card.md) describes intended use and limitations; the
 [validation protocol](validation_protocol.md) specifies how these diagnostics enter a
 decision.
+
+## Interpretable dynamic-state and risk references
+
+The modeling package also exposes causal local-level and dynamic-linear Kalman filters,
+fixed-parameter EWMA/GARCH(1,1) variance forecasts, Gaussian interval diagnostics, and an
+OAS shrinkage-covariance estimator. These are standalone reference contracts rather than
+new `model.type` dispatch options: callers must fit or select their parameters inside each
+training fold and pass only frozen parameters into an evaluation interval.
+
+See [State-space, volatility, and covariance baselines](state_space_volatility.md) for
+equations, shapes, chronology, numerical safeguards, deterministic simulation evidence,
+complexity, and limitations.

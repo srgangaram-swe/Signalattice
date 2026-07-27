@@ -15,10 +15,12 @@ local configurations.
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
 import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -186,6 +188,288 @@ class BollingerConfig(_Base):
     n_std: float = 2.0
 
 
+class FrequencyBand(_Base):
+    """A half-open frequency band ``[low, high)`` in cycles per bar."""
+
+    name: str = Field(min_length=1, max_length=32, pattern=r"^[a-z][a-z0-9_]*$")
+    low: float = Field(ge=0.0, le=0.5)
+    high: float = Field(gt=0.0, le=0.5)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> FrequencyBand:
+        if self.high <= self.low:
+            raise ValueError("band high must be strictly greater than low")
+        return self
+
+    @property
+    def period_range(self) -> tuple[float, float]:
+        """Return the equivalent period range in bars, longest period first."""
+        return (float("inf") if self.low == 0.0 else 1.0 / self.low, 1.0 / self.high)
+
+
+def _default_bands() -> list[FrequencyBand]:
+    """Return the default low/mid/high split of the one-sided band.
+
+    The cut points (periods of 8 and 3 bars) separate roughly monthly-to-weekly
+    structure, weekly-to-multi-day structure, and near-Nyquist bar-to-bar noise.
+    They are a stated convention, not a tuned result: no band edge was chosen by
+    looking at an outcome.
+    """
+    return [
+        FrequencyBand(name="low", low=0.0, high=0.125),
+        FrequencyBand(name="mid", low=0.125, high=1.0 / 3.0),
+        FrequencyBand(name="high", low=1.0 / 3.0, high=0.5),
+    ]
+
+
+class DescriptorConfig(_Base):
+    """Parameters governing the spectrum-to-descriptor reduction."""
+
+    rolloff_quantile: float = Field(default=0.85, gt=0.0, lt=1.0)
+    concentration_bins: int = Field(default=3, ge=1, le=64)
+    bands: list[FrequencyBand] = Field(default_factory=_default_bands, min_length=1)
+
+    @model_validator(mode="after")
+    def _unique_band_names(self) -> DescriptorConfig:
+        names = [band.name for band in self.bands]
+        if len(set(names)) != len(names):
+            raise ValueError("frequency band names must be unique")
+        return self
+
+
+class SpectralWindow(_Base):
+    """Declared contract of one causal spectral analysis window.
+
+    Every field is part of the reproducibility surface: a time-frequency feature
+    whose windowing is implicit cannot be reproduced, and its frequency axis
+    cannot be interpreted.
+
+    Attributes:
+        length: Causal lookback in bars. The value at bar *t* uses
+            ``x[t-length+1 .. t]`` and nothing later.
+        segment_length: Sub-segment length for Welch/STFT averaging. Equal to
+            ``length`` means a single periodogram — maximum frequency
+            resolution, maximum variance.
+        hop: Advance between consecutive sub-segments; ``overlap`` is derived.
+        n_fft: FFT length. Above ``segment_length`` this zero-pads, which
+            interpolates the frequency axis without adding real resolution.
+        sampling_frequency: Samples per unit time. ``1.0`` for daily bars, which
+            makes the frequency unit cycles per *bar*.
+        detrend: Per-segment trend removal applied before tapering.
+        taper: Analysis taper applied to each segment.
+    """
+
+    length: int = Field(default=64, ge=4, le=1024)
+    segment_length: int = Field(default=32, ge=4, le=1024)
+    hop: int = Field(default=16, ge=1, le=1024)
+    n_fft: int = Field(default=64, ge=4, le=4096)
+    sampling_frequency: float = Field(default=1.0, gt=0.0, le=1_000.0)
+    detrend: Literal["none", "mean", "linear"] = "mean"
+    taper: Literal["boxcar", "hann", "hamming", "blackman"] = "hann"
+
+    @model_validator(mode="after")
+    def _consistent_geometry(self) -> SpectralWindow:
+        if self.segment_length > self.length:
+            raise ValueError("segment_length must not exceed the causal window length")
+        if self.hop > self.segment_length:
+            raise ValueError("hop must not exceed segment_length")
+        if self.n_fft < self.segment_length:
+            raise ValueError("n_fft must be at least segment_length")
+        return self
+
+    @property
+    def overlap(self) -> int:
+        """Samples shared by consecutive sub-segments."""
+        return self.segment_length - self.hop
+
+    @property
+    def n_segments(self) -> int:
+        """Number of sub-segments averaged inside one causal window."""
+        return 1 + (self.length - self.segment_length) // self.hop
+
+    @property
+    def padding(self) -> str:
+        """Whether segments are zero-padded to reach ``n_fft``."""
+        return "none" if self.n_fft == self.segment_length else "zero"
+
+    @property
+    def warmup_bars(self) -> int:
+        """Bars that must elapse before the first complete window exists."""
+        return self.length - 1
+
+    @property
+    def frequency_unit(self) -> str:
+        """Unit of the frequency axis. Bar time, never calendar time."""
+        return "cycles_per_bar" if self.sampling_frequency == 1.0 else "cycles_per_sample"
+
+    def frequencies(self) -> list[float]:
+        """One-sided bin frequencies of the declared transform, in cycles per bar."""
+        spacing = 1.0 / self.sampling_frequency
+        return [float(value) for value in np.fft.rfftfreq(self.n_fft, d=spacing)]
+
+
+SpectralChannel = Literal["return", "volatility", "volume", "residual"]
+
+
+def _default_spectral_channels() -> list[SpectralChannel]:
+    """Return the default analysis channels, freshly allocated per instance."""
+    return ["return", "volatility", "volume", "residual"]
+
+
+class SpectralConfig(_Base):
+    """Opt-in configuration for the causal spectral feature engine (SF-S3-MR1).
+
+    Disabled by default: the capability adds columns and compute to every
+    downstream run, so it must be requested rather than inherited. Disabling it
+    again drops only ``f_spec_*`` columns and cannot corrupt previously
+    materialized evidence, because no existing column is redefined.
+    """
+
+    enabled: bool = False
+    window: SpectralWindow = Field(default_factory=SpectralWindow)
+    descriptors: DescriptorConfig = Field(default_factory=DescriptorConfig)
+    channels: list[SpectralChannel] = Field(
+        default_factory=_default_spectral_channels,
+        min_length=1,
+    )
+    volatility_window: int = Field(default=21, ge=2, le=1024)
+    beta_window: int = Field(default=63, ge=2, le=1024)
+    wavelet_channels: list[SpectralChannel] = Field(default_factory=list)
+    wavelet: Literal["haar", "db2"] = "db2"
+    dwt_levels: int = Field(default=3, ge=1, le=10)
+    cwt_periods: list[float] = Field(default_factory=lambda: [4.0, 8.0, 16.0, 32.0], min_length=1)
+    morlet_omega0: float = Field(default=6.0, ge=3.0, le=20.0)
+
+    @model_validator(mode="after")
+    def _validated(self) -> SpectralConfig:
+        if len(set(self.channels)) != len(self.channels):
+            raise ValueError("channels must be unique")
+        unknown = set(self.wavelet_channels) - set(self.channels)
+        if unknown:
+            raise ValueError(
+                f"wavelet channels must be analysed channels; extra: {sorted(unknown)}"
+            )
+        if self.wavelet_channels and self.window.length % (2**self.dwt_levels) != 0:
+            raise ValueError(
+                f"window length {self.window.length} must be divisible by "
+                f"2**dwt_levels ({2**self.dwt_levels}) for an even filter-bank cascade"
+            )
+        if any(not math.isfinite(period) or period <= 2.0 for period in self.cwt_periods):
+            # At or below two bars per cycle a sampled sinusoid is aliased, so a
+            # "period" there describes the sampling grid, not the market.
+            raise ValueError("cwt_periods must be finite and above the Nyquist period of 2 bars")
+        if len(set(self.cwt_periods)) != len(self.cwt_periods):
+            raise ValueError("cwt_periods must be unique")
+        return self
+
+
+class TimeFrequencyConfig(_Base):
+    """Opt-in configuration for time-frequency tensors (SF-S3-MR2).
+
+    A spectrogram or scalogram is a *representation*, not a feature: it is a
+    dense tensor per observation rather than a scalar column, so it is built,
+    cached, and rendered separately from the ``f_spec_*`` descriptor columns and
+    never enters the feature matrix.
+
+    Disabled by default. Enabling it adds no columns to any existing artifact,
+    and disabling it again leaves prior evidence intact.
+    """
+
+    enabled: bool = False
+    representation: Literal["spectrogram", "scalogram"] = "spectrogram"
+    window: SpectralWindow = Field(default_factory=SpectralWindow)
+    channels: list[SpectralChannel] = Field(
+        default_factory=_default_spectral_channels, min_length=1
+    )
+    volatility_window: int = Field(default=21, ge=2, le=1024)
+    beta_window: int = Field(default=63, ge=2, le=1024)
+    #: Scalogram target periods in bars, converted to Morlet scales.
+    scalogram_periods: list[float] = Field(
+        default_factory=lambda: [3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0], min_length=2
+    )
+    morlet_omega0: float = Field(default=6.0, ge=3.0, le=20.0)
+    normalization: Literal["none", "train_log_zscore"] = "train_log_zscore"
+    #: Refusal thresholds on the materialized tensor, not tuning knobs.
+    max_tensor_cells: int = Field(default=200_000_000, ge=1_000, le=4_000_000_000)
+    max_object_bytes: int = Field(default=2_000_000_000, ge=1_000, le=64_000_000_000)
+    cache_dir: str = "data/time-frequency"
+
+    @field_validator("cache_dir")
+    @classmethod
+    def _safe_cache_dir(cls, value: str) -> str:
+        path = Path(value)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError("`time_frequency.cache_dir` must be a safe relative path")
+        return value
+
+    @model_validator(mode="after")
+    def _validated(self) -> TimeFrequencyConfig:
+        if len(set(self.channels)) != len(self.channels):
+            raise ValueError("channels must be unique")
+        if any(not math.isfinite(period) or period <= 2.0 for period in self.scalogram_periods):
+            raise ValueError(
+                "scalogram_periods must be finite and above the Nyquist period of 2 bars"
+            )
+        if len(set(self.scalogram_periods)) != len(self.scalogram_periods):
+            raise ValueError("scalogram_periods must be unique")
+        if self.scalogram_periods != sorted(self.scalogram_periods):
+            # A sorted axis is part of the tensor contract: an unordered scale
+            # axis makes a rendered scalogram silently unreadable.
+            raise ValueError("scalogram_periods must be sorted ascending")
+        return self
+
+
+RepresentationFamily = Literal["raw", "spectral", "wavelet", "emd", "vmd"]
+
+
+def _default_representation_families() -> list[RepresentationFamily]:
+    """Return every comparable family, freshly allocated per instance."""
+    return ["raw", "spectral", "wavelet", "emd", "vmd"]
+
+
+class RepresentationConfig(_Base):
+    """Shared contract for comparing representation families (SF-S3-MR3).
+
+    One window, one detrend, one warm-up, one stride — for every family. The
+    comparison the sprint exists to run is only meaningful if the arms differ in
+    exactly one respect, so there is deliberately no per-family preprocessing
+    setting to get wrong.
+    """
+
+    enabled: bool = False
+    window: SpectralWindow = Field(default_factory=SpectralWindow)
+    descriptors: DescriptorConfig = Field(default_factory=DescriptorConfig)
+    families: list[RepresentationFamily] = Field(
+        default_factory=_default_representation_families, min_length=1
+    )
+    #: Adaptive decomposition is orders of magnitude costlier than an FFT, so
+    #: per-window families are evaluated every `stride` bars. Skipped bars stay
+    #: NaN — an honest gap, never a forward fill.
+    stride: int = Field(default=1, ge=1, le=252)
+    wavelet: Literal["haar", "db2"] = "db2"
+    dwt_levels: int = Field(default=3, ge=1, le=10)
+    n_reported_modes: int = Field(default=4, ge=1, le=20)
+    max_modes: int = Field(default=8, ge=1, le=20)
+    sd_tolerance: float = Field(default=0.2, gt=0.0, le=1.0)
+    max_sift_iterations: int = Field(default=100, ge=1, le=2_000)
+    vmd_alpha: float = Field(default=2000.0, gt=0.0, le=1_000_000.0)
+    vmd_tau: float = Field(default=0.0, ge=0.0, le=10.0)
+    vmd_max_iterations: int = Field(default=500, ge=1, le=5_000)
+
+    @model_validator(mode="after")
+    def _validated(self) -> RepresentationConfig:
+        if len(set(self.families)) != len(self.families):
+            raise ValueError("families must be unique")
+        if "wavelet" in self.families and self.window.length % (2**self.dwt_levels) != 0:
+            raise ValueError(
+                f"window length {self.window.length} must be divisible by "
+                f"2**dwt_levels ({2**self.dwt_levels}) for an even filter-bank cascade"
+            )
+        if self.n_reported_modes > self.max_modes:
+            raise ValueError("n_reported_modes cannot exceed max_modes")
+        return self
+
+
 class FeatureConfig(_Base):
     """Feature-engineering configuration."""
 
@@ -202,6 +486,9 @@ class FeatureConfig(_Base):
     drawdown_window: int = 252
     cross_sectional: bool = True
     dropna: bool = True
+    spectral: SpectralConfig = Field(default_factory=SpectralConfig)
+    time_frequency: TimeFrequencyConfig = Field(default_factory=TimeFrequencyConfig)
+    representations: RepresentationConfig = Field(default_factory=RepresentationConfig)
 
 
 class FeatureStoreConfig(_Base):
