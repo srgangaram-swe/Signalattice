@@ -97,6 +97,12 @@ benchmark-feature-store: ## Regenerate synthetic feature-store JSON and Seaborn 
 		--output-plot docs/assets/feature_store_latency_2026-07-25.png \
 		--output-example-manifest docs/examples/feature_store_manifest.json
 
+.PHONY: benchmark-state-space
+benchmark-state-space: ## Regenerate state-space/risk JSON and Seaborn evidence
+	$(BIN)/python scripts/benchmark_state_space_baselines.py \
+		--output-json docs/benchmarks/state_space_baselines_2026-07-26.json \
+		--output-plot docs/assets/state_space_baselines_2026-07-26.png
+
 .PHONY: clean
 clean: ## Remove caches and build artifacts
 	rm -rf build dist *.egg-info src/*.egg-info .pytest_cache .ruff_cache .mypy_cache htmlcov .coverage

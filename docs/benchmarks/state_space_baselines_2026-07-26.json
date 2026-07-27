@@ -1,0 +1,122 @@
+{
+  "benchmark": "state_space_volatility_baselines",
+  "conditioning_evidence": {
+    "condition_number_ratio": 3.3246741117606046e-06,
+    "minimum_eigenvalue": 0.0026683864991725015,
+    "sample_condition_number": 3662597621.1627803,
+    "shrinkage_condition_number": 12176.94349287587,
+    "shrinkage_intensity": 0.0008630944122057159
+  },
+  "dependencies": {
+    "numpy": "2.5.1",
+    "scikit-learn": "1.9.0",
+    "scipy": "1.18.0",
+    "seaborn": "0.13.2"
+  },
+  "evidence": "deterministic synthetic implementation-recovery workload",
+  "limitations": [
+    "single local process on one laptop",
+    "synthetic linear-Gaussian and fixed-parameter GARCH processes",
+    "no parameter-estimation, market-data, transaction-cost, or execution evidence",
+    "not evidence of alpha, paper-trading readiness, or live-trading readiness",
+    "timings are descriptive and are not a CI pass/fail threshold"
+  ],
+  "n_covariance_features": 24,
+  "n_dynamic_features": 4,
+  "n_observations": 5000,
+  "peak_tracemalloc_bytes": 3417456,
+  "platform": "macOS-15.5-arm64-arm-64bit-Mach-O",
+  "python": "3.13.11",
+  "raw_samples": [
+    {
+      "dynamic_linear_seconds": 0.46714212498045526,
+      "garch11_seconds": 0.012286916986340657,
+      "local_level_seconds": 0.021527040982618928,
+      "shrinkage_covariance_seconds": 0.00048391701420769095
+    },
+    {
+      "dynamic_linear_seconds": 0.4718000419961754,
+      "garch11_seconds": 0.012187124986667186,
+      "local_level_seconds": 0.02182250001351349,
+      "shrinkage_covariance_seconds": 0.00047633302165195346
+    },
+    {
+      "dynamic_linear_seconds": 0.4698997090163175,
+      "garch11_seconds": 0.012514166999608278,
+      "local_level_seconds": 0.02257766597904265,
+      "shrinkage_covariance_seconds": 0.0003765419824048877
+    },
+    {
+      "dynamic_linear_seconds": 0.4700643750256859,
+      "garch11_seconds": 0.013369166001211852,
+      "local_level_seconds": 0.021838082990143448,
+      "shrinkage_covariance_seconds": 0.0004645829903893173
+    },
+    {
+      "dynamic_linear_seconds": 0.4772534999938216,
+      "garch11_seconds": 0.012332709011388943,
+      "local_level_seconds": 0.023006292001809925,
+      "shrinkage_covariance_seconds": 0.0004211250052321702
+    },
+    {
+      "dynamic_linear_seconds": 0.47687958300230093,
+      "garch11_seconds": 0.013117915979819372,
+      "local_level_seconds": 0.02217920799739659,
+      "shrinkage_covariance_seconds": 0.0004619169922079891
+    },
+    {
+      "dynamic_linear_seconds": 0.47466720899683423,
+      "garch11_seconds": 0.013063082995358855,
+      "local_level_seconds": 0.022925625002244487,
+      "shrinkage_covariance_seconds": 0.0004243750008754432
+    }
+  ],
+  "repetitions": 7,
+  "schema_version": "1.0.0",
+  "seed": 20260726,
+  "simulation_evidence": {
+    "dynamic_state_filtered_mse": 0.0013816438257365053,
+    "dynamic_state_mse_ratio": 0.0020416262375845965,
+    "dynamic_state_zero_mse": 0.6767369072270045,
+    "garch11_constant_variance_mse": 0.07323143382843678,
+    "garch11_mse_ratio": 2.220446049250313e-16,
+    "garch11_variance_mse": 0.0,
+    "gaussian_interval_empirical_coverage": 0.9514,
+    "gaussian_interval_nominal_coverage": 0.95,
+    "local_level_constant_mse": 157.9818635668355,
+    "local_level_filtered_mse": 0.02532314173529362,
+    "local_level_mse_ratio": 0.00016029144842047305
+  },
+  "throughput_observations_per_second": {
+    "dynamic_linear": 10597.709951116392,
+    "garch11": 399547.1692327992,
+    "local_level": 225436.36366938366,
+    "shrinkage_covariance": 10824455.658363465
+  },
+  "timing_seconds": {
+    "dynamic_linear_seconds": {
+      "max": 0.4772534999938216,
+      "median": 0.4718000419961754,
+      "min": 0.46714212498045526,
+      "p95_nearest_rank": 0.4772534999938216
+    },
+    "garch11_seconds": {
+      "max": 0.013369166001211852,
+      "median": 0.012514166999608278,
+      "min": 0.012187124986667186,
+      "p95_nearest_rank": 0.013369166001211852
+    },
+    "local_level_seconds": {
+      "max": 0.023006292001809925,
+      "median": 0.02217920799739659,
+      "min": 0.021527040982618928,
+      "p95_nearest_rank": 0.023006292001809925
+    },
+    "shrinkage_covariance_seconds": {
+      "max": 0.00048391701420769095,
+      "median": 0.0004619169922079891,
+      "min": 0.0003765419824048877,
+      "p95_nearest_rank": 0.00048391701420769095
+    }
+  }
+}

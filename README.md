@@ -81,6 +81,9 @@ Key capabilities include:
 - proper probability scores, reliability tables, Brier decomposition, expected calibration
   error, ROC and precision-recall analysis, selective prediction, prediction-decile returns,
   fold stability, and date-block bootstrap intervals;
+- causal local-level and dynamic-linear Kalman references, fixed-parameter EWMA/GARCH
+  variance forecasts, Gaussian interval diagnostics, and conditioned OAS covariance
+  estimation with deterministic simulation-recovery evidence;
 - long-only and dollar-neutral research portfolios with probability or quantile selection,
   no-trade bands, position and gross-exposure limits, causal volatility targeting, costs,
   and explicit execution lag;
@@ -239,6 +242,10 @@ tests/                      unit and integration contracts
 - [Nasdaq Data Link ingestion boundary](docs/nasdaq_data_link.md)
 - [Signal Foundry dataset contract](docs/signal_foundry_contract.md)
 - [Feature registry, immutable store, and resumable backfills](docs/feature_store.md)
+- [Causal spectral transforms and descriptors](docs/spectral_features.md)
+- [Versioned time-frequency tensors](docs/time_frequency_tensors.md)
+- [Adaptive decomposition and the representation contract](docs/adaptive_decomposition.md)
+- [Cross-asset probabilistic stack](docs/cross_asset_probabilistic_stack.md)
 - [Methodology](docs/methodology.md)
 - [Model card](docs/model_card.md)
 - [Data card](docs/data_card.md)

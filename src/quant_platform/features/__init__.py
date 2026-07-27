@@ -12,6 +12,14 @@ Public API:
   — introspect the conventional-feature contract registry.
 - individual indicator functions in :mod:`quant_platform.features.technical`.
 - immutable registry, quality, feature-store, and resumable backfill contracts.
+- :func:`build_spectral_features` — opt-in causal spectral/time-frequency
+  descriptors (SF-S3-MR1), disabled unless explicitly configured.
+- :func:`build_time_frequency_tensor` and :class:`TimeFrequencyStore` —
+  opt-in spectrogram/scalogram tensors and their content-addressed store
+  (SF-S3-MR2); tensors never join the feature matrix.
+- :func:`emd` / :func:`eemd` / :func:`ceemdan` / :func:`vmd` and
+  :func:`build_representation_descriptors` — bounded adaptive decompositions
+  and the shared representation-comparison contract (SF-S3-MR3).
 """
 
 from __future__ import annotations
@@ -35,42 +43,86 @@ from quant_platform.features.contracts import (
     statistical_contracts,
     validate_contract_panel,
 )
+from quant_platform.features.decomposition import (
+    Decomposition,
+    DecompositionReport,
+    ceemdan,
+    eemd,
+    emd,
+    vmd,
+)
 from quant_platform.features.pipeline import (
     FEATURE_PREFIX,
     build_features,
     feature_columns,
 )
 from quant_platform.features.registry import FeatureRegistry, FeatureSpec
+from quant_platform.features.representations import (
+    REPRESENTATION_FAMILIES,
+    build_representation_descriptors,
+    shared_window_identity,
+)
+from quant_platform.features.spectral import (
+    SPECTRAL_PREFIX,
+    build_spectral_features,
+    spectral_column_names,
+    spectral_feature_registry,
+)
 from quant_platform.features.store import (
     FeatureMaterializationRequest,
     FeatureOutputContract,
     FeatureStore,
 )
+from quant_platform.features.time_frequency import (
+    TimeFrequencyMetadata,
+    TimeFrequencyTensor,
+    build_time_frequency_tensor,
+    normalize_tensor,
+)
+from quant_platform.features.time_frequency_store import TimeFrequencyStore
 
 __all__ = [
     "CONTRACT_PREFIX",
     "CONTRACT_REGISTRY",
     "FEATURE_PREFIX",
+    "REPRESENTATION_FAMILIES",
+    "SPECTRAL_PREFIX",
     "FeatureContract",
     "FeatureFamily",
     "FeatureMaterializationRequest",
     "FeatureOutputContract",
     "FeatureRegistry",
     "FeatureSpec",
+    "Decomposition",
+    "DecompositionReport",
     "FeatureStore",
     "MissingDataPolicy",
     "NumericalRange",
     "Scope",
     "TemporalAvailability",
+    "TimeFrequencyMetadata",
+    "TimeFrequencyStore",
+    "TimeFrequencyTensor",
     "Unit",
     "build_contract_features",
     "build_features",
+    "build_representation_descriptors",
+    "build_spectral_features",
+    "build_time_frequency_tensor",
+    "ceemdan",
     "contract_metadata_frame",
     "default_contracts",
+    "eemd",
+    "emd",
     "feature_columns",
     "get_contract",
     "liquidity_contracts",
     "list_contracts",
+    "normalize_tensor",
+    "shared_window_identity",
+    "spectral_column_names",
+    "spectral_feature_registry",
     "statistical_contracts",
     "validate_contract_panel",
+    "vmd",
 ]
